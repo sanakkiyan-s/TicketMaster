@@ -1,0 +1,20 @@
+{
+  "repositories": {
+    "backend/api-gateway": { "path": "backend/api-gateway", "lastIngestedCommit": null },
+    "backend/auth-service": { "path": "backend/auth-service", "lastIngestedCommit": null },
+    "backend/user-service": { "path": "backend/user-service", "lastIngestedCommit": null },
+    "backend/event-service": { "path": "backend/event-service", "lastIngestedCommit": null },
+    "backend/venue-service": { "path": "backend/venue-service", "lastIngestedCommit": null },
+    "backend/search-service": { "path": "backend/search-service", "lastIngestedCommit": null },
+    "backend/inventory-service": { "path": "backend/inventory-service", "lastIngestedCommit": null },
+    "backend/booking-service": { "path": "backend/booking-service", "lastIngestedCommit": null },
+    "backend/queue-service": { "path": "backend/queue-service", "lastIngestedCommit": null },
+    "backend/payment-service": { "path": "backend/payment-service", "lastIngestedCommit": null },
+    "backend/ticket-service": { "path": "backend/ticket-service", "lastIngestedCommit": null },
+    "backend/notification-service": { "path": "backend/notification-service", "lastIngestedCommit": null },
+    "backend/fraud-service": { "path": "backend/fraud-service", "lastIngestedCommit": null },
+    "backend/analytics-service": { "path": "backend/analytics-service", "lastIngestedCommit": null },
+    "frontend": { "path": "frontend", "lastIngestedCommit": null },
+    "infra": { "path": "infra", "lastIngestedCommit": null }
+  }
+}
