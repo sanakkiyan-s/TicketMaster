@@ -117,6 +117,176 @@ real failure case: booking-service must trigger an automatic refund and
 notify the user. Not currently modeled as a retryable success case,
 because the seat may have already been sold to someone else by then.
 
+## Hold TTL base duration (resolved)
+
+**5 minutes**, flat across all events (no demand-tiering). Not the total
+time a user gets to check out — that's covered separately by
+[[ADR-006-saga-booking-orchestration]]'s extension mechanism (renew on
+page interaction, extend on payment-submission start, hard ceiling 15 min
+from original hold). Base TTL's only job is bridging "seat selected" to
+"user does something" (form fill triggers renewal) — it does not need to
+cover a full slow checkout, since renewal already does.
+
+Reasoning:
+
+```
+Too short (1-2 min): punishes a user who paused a few seconds after
+  selecting — they weren't abandoning, just slow to click into the form.
+Too long (10 min): holds a likely-abandoned seat away from other buyers
+  during exactly the scenario this system is optimizing for (hot on-sale
+  contention) — wastes the resource being protected.
+5 min: enough room for a real user to start engaging (which then
+  triggers renewal), short enough to release a truly-abandoned seat
+  reasonably fast.
+```
+
+Flat, not tiered by event demand: tiering adds real implementation
+complexity (classify event, thread tier through hold creation) for a
+number already flagged as a starting default needing real production
+tuning — not worth building before there's data to justify it, same
+category as ADR-004's 75% threshold and ADR-006's retry timings.
+
+## Amendment: Hold Renewal Strategy — dropped "renew on interaction" (resolved)
+
+**Problem**: an earlier version of this design (and [[ADR-006-saga-booking-orchestration]])
+called for extending `held_until` on every user page interaction
+(clicks, keystrokes). Under peak on-sale load this is an unbounded
+O(N)-writes-per-session hammer on the same hot `SeatHold` rows in
+Postgres — reintroduces the exact connection-pool/lock-contention
+failure mode this ADR exists to prevent (see Requirements above), just
+moved from "many users, one seat" to "one user, many writes."
+
+**Decision**: drop renew-on-interaction entirely, replace with:
+
+```
+1. Fixed 5 min base hold on creation: held_until = NOW() + 5 minutes.
+   No writes at all between creation and the next checkpoint below.
+
+2. Client-side countdown is UI-only, computed from held_until - NOW(),
+   no server round-trip needed to show a timer.
+
+3. Single extension checkpoint — payment-submission start:
+   if held_until - NOW() < 3 minutes AND hard ceiling not yet reached:
+     held_until = held_until + 5 minutes  (atomic, one write)
+   This is the ONLY possible additional write to a given hold row
+   beyond its creation.
+
+4. Hard ceiling: total hold duration, including the extension, never
+   exceeds 15 minutes from the ORIGINAL held_until. Unchanged from
+   ADR-006.
+```
+
+Result: DB writes per hold = 1 (create) + at most 1 (payment-submit
+extension) + 1 (confirm/release) — flat O(1) per booking, independent of
+how long or how actively a user browses before checking out.
+
+**Accepted trade-off**: a user who never engages past selecting a seat
+loses it after 5 minutes of total inactivity — desired, not a bug; frees
+contested inventory back to active buyers, which is the entire point of
+a tight base TTL under contention.
+
+## Amendment: unique constraint must be co-located with the Citus shard key (CRITICAL)
+
+**Defect found**: this ADR names the partial unique index on
+`(session_id, seat_id)` as "the actual correctness guarantee." That
+guarantee **silently degrades to per-shard** under
+[[ADR-005-postgres-sharding]].
+
+```
+Citus enforces a unique constraint only WITHIN each shard, unless the
+distribution column is part of the constraint. ADR-005 distributes by
+event_id. The constraint above does not contain event_id.
+
+Result: two rows for the same (session_id, seat_id) landing on two
+different shards would BOTH be accepted. The double-sell backstop —
+the thing this ADR calls the real guarantee — is not global.
+```
+
+Neither ADR mentioned the interaction. **Resolution**: `event_id` must be
+part of the seat table's primary/unique key, so the constraint is
+co-located with the distribution column:
+
+```sql
+-- partial unique index, amended
+UNIQUE (event_id, session_id, seat_id) WHERE status IN ('HELD','PURCHASED')
+```
+
+Must be settled before `inventory-service` is built — retrofitting a
+distribution key after the table exists is a table rebuild, not a
+migration. Verified by a test asserting the constraint holds against a
+**Citus-enabled** Postgres container, not vanilla Postgres (vanilla
+passes either way and proves nothing).
+
+## Amendment: Redis command timeout + circuit breaker (fail-open was unimplementable)
+
+**Defect found**: the Decision above says "Redis unavailable -> fail
+open, skip straight to step 2," but specifies **no command timeout and no
+circuit breaker**. That covers a Redis that *refuses* connections. It does
+not cover a Redis that is **blackholed** — accepts the TCP connection and
+never responds — which is the more common real-world failure (network
+partition, overloaded node, GC pause).
+
+```
+With Lettuce's default command timeout, a blackholed Redis makes every
+hold request block for seconds before falling open. Under a stampede,
+that exhausts the servlet thread pool.
+
+Net effect: "degrades gracefully" becomes an outage — and a WORSE one
+than the Postgres connection-pool exhaustion this ADR exists to prevent.
+```
+
+**Resolution**:
+
+```
+Redis command timeout:  ~50ms   (starting default, needs real data)
+Circuit breaker:        Resilience4j, opens after a small consecutive
+                        failure count; while open, hold requests skip
+                        Redis entirely rather than each paying the
+                        timeout. Half-open probe to recover.
+```
+
+Both numbers come from load-test experiment E1 and are verified by chaos
+experiment C1, which must test **three** Redis modes — connection-refused,
+blackhole/timeout, and added latency. Testing only the clean-refusal mode
+passes while the real failure mode is broken.
+
+## Amendment: application-supplied timestamps, not SQL `now()`
+
+The Decision block evaluates `held_until = now() + TTL` and the sweep's
+`held_until < now()` **in SQL**. Two consequences:
+
+1. Hold expiry cannot be driven deterministically from a test — advancing
+   a Java `Clock` does not move Postgres's clock, so verifying the
+   ADR-006 payment race requires literally waiting minutes.
+2. More importantly: with many `inventory-service` instances, app-vs-DB
+   clock skew becomes a live correctness variable in expiry decisions.
+
+**Resolution**: pass an `Instant` from an injected `java.time.Clock`
+instead of calling SQL `now()`. Enforce with an ArchUnit rule banning
+direct `Instant.now()`/`LocalDateTime.now()` in production code. This is
+a testability and skew-safety change; the locking strategy itself is
+unchanged.
+
+## Amendment: hold outcomes are three-way, not binary
+
+Instrumentation requirement, needed to answer this ADR's own "Revisit
+When" conditions. A rejected hold is not one thing:
+
+```
+won            -> normal
+lost_race      -> normal and EXPECTED during an on-sale; this ADR
+                  explicitly accepts it ("acceptable for losers of a
+                  hot-seat race to be rejected fast")
+infra_failure  -> Postgres timeout, Redis fail-open then PG failure,
+                  connection pool exhaustion -> THIS is the error
+```
+
+Only `infra_failure` counts against an SLO. A binary success/failure
+metric makes a *successful* on-sale look like an outage, and hides the
+one signal that actually indicates this ADR's design is failing.
+Companion metric: Redis fail-open rate — a nonzero rate under normal
+conditions means the fast gate is not protecting anything.
+
 # Why
 
 Matches the project's stated priority (correctness over throughput,
@@ -138,6 +308,15 @@ gracefully (slower, not incorrect) if Redis is down.
 reason about failure modes for; must implement and test the fail-open path
 (Redis down → straight to Postgres) explicitly, not assume it "just
 works."
+
+**Amendment: PgBouncer added in front of Postgres (ADR-024).** The Redis
+fast-gate reduces *how often* a connection gets requested during a
+hot-seat stampede, but never addressed the *ceiling* on how many real
+Postgres connections can exist at once — that gap is what
+[[ADR-024-pgbouncer-connection-pooling]] closes. The two are
+complementary, not overlapping: Redis rejects losing attempts before they
+touch a connection at all; PgBouncer bounds the real connection count for
+whatever does get through.
 
 # Revisit When
 

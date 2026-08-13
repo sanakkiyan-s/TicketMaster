@@ -56,6 +56,7 @@ concretely why — cite the ADR you'd supersede.
 | `backend/notification-service` | Email/SMS/push on booking/payment/event updates | not started |
 | `backend/fraud-service` | Risk scoring, bot detection, velocity/bulk-limit checks | not started |
 | `backend/analytics-service` | Organizer sales dashboards, reporting (async) | not started |
+| `backend/media-service` | Object storage, video trailer upload + FFmpeg transcoding | not started |
 | `frontend` | React/TypeScript client | not started |
 | `infra` | Docker Compose, CI/CD, deployment config | not started |
 

@@ -13,6 +13,18 @@ None. All 12 backend services, `frontend`, and `infra` are empty
 directories — no code written yet. This page describes the **target
 design** only.
 
+**Staleness notice (2026-08-13)**: written 2026-08-05, before
+`fraud-service`/`analytics-service` (ADR-003), `media-service` (ADR-017),
+and every ADR from ADR-004 onward — the service count above ("12") and
+the diagram below no longer match the current 16-service design, and
+internal calls are still shown as generic arrows predating ADR-023's
+move to gRPC. `wiki/index.md` is the current, maintained catalog; treat
+this page as a historical snapshot of the earliest design pass rather
+than live truth until it is regenerated. Not rewritten here for the same
+reason as `final-architecture-reference.md`'s staleness notice — a
+correct regeneration needs to re-derive the diagram, not patch it
+piecemeal.
+
 ## Target Design
 
 ### Components
@@ -61,8 +73,9 @@ flowchart LR
   Kafka -.-> NotifySvc
 ```
 
-Diagram is illustrative of target shape — exact Kafka topic list lives in
-domain/flow pages, not duplicated here.
+Diagram is illustrative of target shape — exact Kafka topic list, event
+envelope, outbox/Debezium delivery mechanism, and DLQ design live in
+[[ADR-007-kafka-event-schema]], not duplicated here.
 
 ### Data ownership (target)
 
@@ -114,11 +127,12 @@ are tracked as open questions below.
 
 ## Open Questions
 
-- Exact Kafka topic list and schema per event (BookingConfirmed,
-  PaymentSucceeded, etc.) — not yet designed.
+- ~~Exact Kafka topic list and schema per event~~ — resolved, see
+  [[ADR-007-kafka-event-schema]].
 - Build order across the 12 services — likely inventory-service first
   (hardest problem) but not yet decided/documented.
-- Whether api-gateway is Spring Cloud Gateway or a simpler reverse proxy —
-  not yet decided.
+- ~~Whether api-gateway is Spring Cloud Gateway or a simpler reverse
+  proxy~~ — resolved: Spring Cloud Gateway behind Nginx, see
+  [[api-gateway]] / [[infra]].
 - Seat locking strategy (optimistic vs pessimistic vs Redis-assisted) —
   not yet decided; needs its own ADR before inventory-service is built.

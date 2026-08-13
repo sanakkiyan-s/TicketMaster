@@ -27,6 +27,12 @@ Not started. `backend/event-service` is an empty directory.
 - Does not own venue layout (venue-service) or seat inventory
   (inventory-service) — an event references a venue and session, inventory
   is provisioned separately per session.
+- **Owns "Notify Me" signup capture**, per session, feeding two
+  consumers: [[ADR-004-redis-cluster-sharding]]'s high-demand flag
+  (a periodic job comparing signup count to venue capacity) and
+  [[notification-service]]'s mass broadcast at on-sale time (via
+  `session.on_sale_started`). Full design:
+  [[ADR-021-notify-me-and-broadcast-alerts]].
 
 ## Gap
 

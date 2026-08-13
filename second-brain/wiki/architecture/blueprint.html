@@ -1,0 +1,656 @@
+<title>TicketMaster Blueprint</title>
+<style>
+  :root{
+    --bg:#eef1f4;
+    --surface:#ffffff;
+    --surface-2:#e4e9ed;
+    --line:#c7d0d8;
+    --line-strong:#9fadb8;
+    --text:#16202a;
+    --text-dim:#5b6b78;
+    --accent:#c1550a;
+    --accent-soft:#f3ddc9;
+    --accent2:#0f8f83;
+    --accent2-soft:#d3ece9;
+    --good:#1f8a4c;
+    --warn:#a3730a;
+    --crit:#c23a3a;
+    --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0b0f14;
+      --surface:#121821;
+      --surface-2:#19212b;
+      --line:#2a3542;
+      --line-strong:#3d4d5c;
+      --text:#e7edf2;
+      --text-dim:#8b9aa8;
+      --accent:#ff9142;
+      --accent-soft:#3a2a18;
+      --accent2:#4fd1c5;
+      --accent2-soft:#12312e;
+      --good:#4fd18a;
+      --warn:#e0b34d;
+      --crit:#ff6b6b;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0b0f14;
+    --surface:#121821;
+    --surface-2:#19212b;
+    --line:#2a3542;
+    --line-strong:#3d4d5c;
+    --text:#e7edf2;
+    --text-dim:#8b9aa8;
+    --accent:#ff9142;
+    --accent-soft:#3a2a18;
+    --accent2:#4fd1c5;
+    --accent2-soft:#12312e;
+    --good:#4fd18a;
+    --warn:#e0b34d;
+    --crit:#ff6b6b;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    min-height:100vh;
+  }
+
+  .shell{
+    display:flex;
+    flex-direction:column;
+    min-height:100vh;
+  }
+
+  header{
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:16px 24px;
+    padding:18px 28px;
+    border-bottom:1px solid var(--line);
+    background:var(--surface);
+    position:sticky;
+    top:0;
+    z-index:20;
+  }
+  .brand{display:flex;flex-direction:column;gap:2px;min-width:220px;}
+  .brand .kicker{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--accent);
+  }
+  .brand h1{
+    margin:0;
+    font-size:20px;
+    font-weight:700;
+    letter-spacing:-.01em;
+  }
+  .status{
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:var(--text-dim);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:5px 10px;
+    background:var(--surface-2);
+  }
+  .status b{color:var(--text);font-weight:600;}
+
+  .toolbar{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+    margin-left:auto;
+  }
+  .search{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    background:var(--surface-2);
+    border:1px solid var(--line);
+    border-radius:7px;
+    padding:6px 10px;
+    min-width:220px;
+  }
+  .search input{
+    border:none;
+    background:transparent;
+    color:var(--text);
+    font-family:var(--sans);
+    font-size:13.5px;
+    outline:none;
+    width:100%;
+  }
+  .search svg{flex:none;color:var(--text-dim);}
+
+  .chips{display:flex;gap:6px;flex-wrap:wrap;}
+  .chip{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.02em;
+    padding:5px 10px;
+    border-radius:999px;
+    border:1px solid var(--line);
+    background:var(--surface-2);
+    color:var(--text-dim);
+    cursor:pointer;
+    user-select:none;
+    transition:background .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .chip:hover{border-color:var(--line-strong);color:var(--text);}
+  .chip.active{
+    background:var(--accent-soft);
+    border-color:var(--accent);
+    color:var(--accent);
+  }
+  .chip:focus-visible, .node:focus-visible rect{outline:2px solid var(--accent);outline-offset:2px;}
+
+  main{
+    flex:1;
+    display:flex;
+    min-height:0;
+  }
+
+  .canvas-wrap{
+    flex:1;
+    overflow:auto;
+    padding:24px;
+    min-width:0;
+  }
+  .canvas-inner{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:8px;
+  }
+  svg#diagram{
+    display:block;
+    width:100%;
+    height:auto;
+    min-width:1100px;
+  }
+
+  .node rect{
+    fill:var(--surface-2);
+    stroke:var(--line-strong);
+    stroke-width:1.2;
+    transition:opacity .15s ease, stroke .15s ease, fill .15s ease;
+  }
+  .node text{
+    fill:var(--text);
+    font-family:var(--sans);
+  }
+  .node .sub{fill:var(--text-dim);font-family:var(--mono);}
+  .node{cursor:pointer;}
+  .node:hover rect{stroke:var(--accent);}
+  .node.selected rect{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.8;}
+  .node.dim{opacity:.22;}
+  .node.match rect{stroke:var(--accent2);stroke-width:1.8;}
+
+  .store rect{fill:var(--accent2-soft);stroke:var(--accent2);}
+  .store text{fill:var(--text);}
+
+  .lane-label{
+    fill:var(--text-dim);
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+  }
+
+  .edge{
+    stroke:var(--line-strong);
+    stroke-width:1.4;
+    fill:none;
+    transition:opacity .15s ease;
+  }
+  .edge.kafka{stroke:var(--accent2);stroke-dasharray:5 4;}
+  .edge.dim{opacity:.12;}
+  .edge-label{
+    fill:var(--text-dim);
+    font-family:var(--mono);
+    font-size:10.5px;
+  }
+  .edge-label tspan.adr{fill:var(--accent);}
+
+  .group-frame{
+    fill:none;
+    stroke:var(--line);
+    stroke-dasharray:3 4;
+  }
+  .group-title{
+    fill:var(--text-dim);
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+  }
+
+  aside{
+    width:340px;
+    flex:none;
+    border-left:1px solid var(--line);
+    background:var(--surface);
+    padding:22px 20px;
+    overflow-y:auto;
+  }
+  aside .empty{
+    color:var(--text-dim);
+    font-size:13.5px;
+    line-height:1.6;
+    margin-top:8px;
+  }
+  aside .empty .hint{
+    display:block;
+    margin-top:14px;
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:var(--text-dim);
+    border-left:2px solid var(--line);
+    padding-left:10px;
+  }
+  .panel-kicker{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--text-dim);
+  }
+  .panel-title{
+    font-size:19px;
+    font-weight:700;
+    margin:4px 0 2px;
+    letter-spacing:-.01em;
+  }
+  .panel-desc{
+    font-size:13.5px;
+    line-height:1.55;
+    color:var(--text-dim);
+    margin:10px 0 18px;
+  }
+  .panel-section h4{
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:.1em;
+    color:var(--text-dim);
+    margin:0 0 8px;
+    font-weight:600;
+  }
+  .adr-list{list-style:none;margin:0 0 20px;padding:0;display:flex;flex-direction:column;gap:6px;}
+  .adr-list li{
+    display:flex;
+    gap:8px;
+    align-items:baseline;
+    font-size:12.5px;
+    line-height:1.45;
+    padding:8px 10px;
+    background:var(--surface-2);
+    border:1px solid var(--line);
+    border-radius:7px;
+  }
+  .adr-list .tag{
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--accent);
+    flex:none;
+    font-weight:600;
+  }
+  .badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px;}
+  .badge{
+    font-family:var(--mono);
+    font-size:10.5px;
+    padding:3px 8px;
+    border-radius:5px;
+    border:1px solid var(--line);
+    color:var(--text-dim);
+  }
+  .badge.good{color:var(--good);border-color:var(--good);}
+  .badge.warn{color:var(--warn);border-color:var(--warn);}
+
+  footer{
+    border-top:1px solid var(--line);
+    background:var(--surface);
+    padding:10px 28px;
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--text-dim);
+    display:flex;
+    gap:18px;
+    flex-wrap:wrap;
+  }
+  footer .lg{display:flex;align-items:center;gap:6px;}
+  footer .swatch{width:14px;height:3px;border-radius:2px;display:inline-block;}
+
+  @media (max-width: 900px){
+    aside{display:none;}
+  }
+</style>
+
+<div class="shell">
+  <header>
+    <div class="brand">
+      <span class="kicker">Second Brain / Architecture</span>
+      <h1>TicketMaster Blueprint</h1>
+    </div>
+    <div class="status">design-complete through <b>ADR-035</b> · build order: <b>undecided</b></div>
+    <div class="toolbar">
+      <div class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="search" type="text" placeholder="Search a service or ADR-NNN…" autocomplete="off" />
+      </div>
+      <div class="chips" id="layerChips"></div>
+    </div>
+  </header>
+
+  <main>
+    <div class="canvas-wrap">
+      <div class="canvas-inner">
+        <svg id="diagram" viewBox="0 0 1560 1180" role="img" aria-label="Layered map of the TicketMaster platform: client through edge, gateway, four service domains, the Kafka event backbone, and the Postgres/Redis/Elasticsearch data layer, with arrows showing protocol and direction between each.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <g id="edges"></g>
+          <g id="frames"></g>
+          <g id="nodes"></g>
+        </svg>
+      </div>
+    </div>
+
+    <aside id="panel">
+      <div class="panel-kicker">Select a node</div>
+      <div class="empty">
+        Click any box in the diagram — a service, the gateway, Kafka, or a data store — to see what it owns and which ADRs decided it.
+        <span class="hint">15 services · 35 ADRs · 1 event backbone</span>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    <div class="lg"><span class="swatch" style="background:var(--line-strong)"></span> gRPC / sync call (ADR-023)</div>
+    <div class="lg"><span class="swatch" style="background:var(--accent2);border-top:2px dashed var(--accent2);height:0"></span> Kafka async (ADR-007)</div>
+    <div class="lg"><span class="swatch" style="background:var(--accent)"></span> selected</div>
+  </footer>
+</div>
+
+<script>
+(function(){
+  var NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent){
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+
+  // ---- data ---------------------------------------------------------
+  var GROUPS = [
+    {id:"edge", label:"Edge", x:60,  y:40,  w:1440, h:170},
+    {id:"identity", label:"Identity", x:60, y:300, w:280, h:300},
+    {id:"catalog", label:"Catalog", x:380, y:300, w:280, h:380},
+    {id:"core", label:"Transaction Core", x:700, y:300, w:280, h:460},
+    {id:"support", label:"Support", x:1020, y:300, w:280, h:380},
+    {id:"data", label:"Data & Event Layer", x:60, y:860, w:1440, h:280}
+  ];
+
+  var NODES = [
+    // edge lane
+    {id:"client", group:"edge", x:110, y:80, w:170, h:60, title:"Client", sub:"React / TypeScript",
+      desc:"Browser and eventual native shell. Talks only to the CDN and, for API calls, the versioned REST edge — never to an internal service directly.",
+      adrs:[]},
+    {id:"cdn", group:"edge", x:340, y:80, w:170, h:60, title:"Cloudflare", sub:"CDN / edge",
+      desc:"Owns everything a request touches before it reaches a service: static assets, cache-tag purge, anycast routing, DDoS throttling.",
+      adrs:[["ADR-016","event-homed anycast routing, geometry/occupancy CDN split"],["ADR-019","Cloudflare vs AWS split at the edge boundary"]]},
+    {id:"nginx", group:"edge", x:570, y:80, w:170, h:60, title:"Nginx", sub:"TLS / LB",
+      desc:"Terminates TLS, load-balances to api-gateway instances, per-IP request-rate limiting — sits in front of, not instead of, the app-level gateway.",
+      adrs:[["ADR-022","per-IP limit_conn for SSE admission"]]},
+    {id:"gateway", group:"edge", x:800, y:70, w:230, h:80, title:"api-gateway", sub:"Spring Cloud Gateway",
+      desc:"Single entry point for all client traffic. Local JWT validation against cached JWKS, business-aware Redis rate limiting, gRPC fan-out to every internal service, REST edge versioning.",
+      adrs:[["ADR-009","two-token service/user JWT model"],["ADR-012","JWKS validation, revocation map"],["ADR-023","gRPC client to every internal service"],["ADR-032","stateless HA, min-3-AZ, liveness/readiness split"],["ADR-033","non-secret config via ConfigMap"],["ADR-034","/api/v1 versioning, generated OpenAPI"]]},
+    {id:"vault", group:"edge", x:1090, y:80, w:170, h:60, title:"Vault", sub:"secrets",
+      desc:"AppRole bootstrap, dynamic Postgres credentials, Transit engine for GDPR key wrapping. Structurally separate from non-secret config.",
+      adrs:[["ADR-010","secrets management"]]},
+    {id:"config", group:"edge", x:1300, y:80, w:170, h:60, title:"ConfigMaps", sub:"non-secret config",
+      desc:"Every 'starting default' tunable across the vault — retry backoffs, thresholds — lives here, git-tracked, per service.",
+      adrs:[["ADR-033","ConfigMap, not Vault, for tunables"]]},
+
+    // identity
+    {id:"auth", group:"identity", x:80, y:340, w:220, h:70, title:"auth-service", sub:"identity",
+      desc:"JWT issuance/refresh, four-phase key rotation, Kafka-pushed revocation with cross-region mirroring.",
+      adrs:[["ADR-012","lifecycle, rotation, revocation"],["ADR-012 §amend","auth.revocation mirrored cross-region"],["ADR-018","sharded by user_id, residency"]]},
+    {id:"user", group:"identity", x:80, y:440, w:220, h:70, title:"user-service", sub:"profile",
+      desc:"Profile, saved-payment display references only — never the provider token itself.",
+      adrs:[["ADR-011","display reference, not pm_xxx"],["ADR-013","GDPR crypto-shredding subject"],["ADR-018","user_id sharding/residency"]]},
+
+    // catalog
+    {id:"event", group:"catalog", x:400, y:340, w:220, h:70, title:"event-service", sub:"events/sessions",
+      desc:"Events, sessions, Notify Me signups, cancellation trigger, organizer ownership anchor.",
+      adrs:[["ADR-021","Notify Me capture"],["ADR-028","cancellation → mass-refund saga"],["ADR-030","organizer_id ownership anchor"]]},
+    {id:"venue", group:"catalog", x:400, y:430, w:220, h:70, title:"venue-service", sub:"seat maps",
+      desc:"Venue + seating layout. Seat-map geometry served via CDN, occupancy kept live and separate.",
+      adrs:[["ADR-016","geometry/occupancy CDN split"]]},
+    {id:"search", group:"catalog", x:400, y:520, w:220, h:70, title:"search-service", sub:"discovery",
+      desc:"Denormalized read model, fed by Kafka — the project's clearest CQRS example.",
+      adrs:[["ADR-007","Kafka projection, read model"],["ADR-016","cross-region search replication"]]},
+    {id:"media", group:"catalog", x:400, y:610, w:220, h:60, title:"media-service", sub:"video/trailers",
+      desc:"Pre-signed uploads, async FFmpeg transcoding via Kafka job topic. 15th service.",
+      adrs:[["ADR-017","object storage, transcoding"],["ADR-030","organizer ownership check on upload"]]},
+
+    // core
+    {id:"inventory", group:"core", x:720, y:340, w:220, h:70, title:"inventory-service", sub:"seat state",
+      desc:"AVAILABLE/HELD/PURCHASED state machine. Redis fast-gate + Postgres FOR UPDATE + unique-constraint backstop — the concurrency core.",
+      adrs:[["ADR-002","hybrid Redis+Postgres seat lock"],["ADR-004","Redis Cluster autoscale"],["ADR-022","SSE connection admission"]]},
+    {id:"booking", group:"core", x:720, y:430, w:220, h:70, title:"booking-service", sub:"orchestration",
+      desc:"Hold → payment → confirm Saga. Compensation logic reused by both cancellation and dispute-loss paths.",
+      adrs:[["ADR-006","Saga orchestration"],["ADR-025","Idempotency-Key policy"],["ADR-028","reuses compensation for mass-refund"],["ADR-031","idempotent Kafka consumer"]]},
+    {id:"queue", group:"core", x:720, y:520, w:220, h:70, title:"queue-service", sub:"virtual waiting room",
+      desc:"Per-show admission control for high-demand on-sales. Randomized draw, bound single-use tokens.",
+      adrs:[["ADR-014","admission-token design"],["ADR-016","per-region authoritative queue"]]},
+    {id:"payment", group:"core", x:720, y:610, w:220, h:70, title:"payment-service", sub:"ledger",
+      desc:"Append-only payment_events ledger — event sourcing, not a mutable status column. Sole holder of provider tokens.",
+      adrs:[["ADR-011","PCI SAQ A, iframe-isolated"],["ADR-020","append-only ledger"],["ADR-024","PgBouncer in front of Citus"],["ADR-035","reconciliation + dispute workflow"]]},
+    {id:"ticket", group:"core", x:720, y:700, w:220, h:60, title:"ticket-service", sub:"issuance/transfer",
+      desc:"Live-generated rotating barcodes, free transfer + paid resale, dispute-hold state.",
+      adrs:[["ADR-014","rotating barcode"],["ADR-029","transfer/resale consistency"],["ADR-035","DISPUTE_HOLD state"]]},
+
+    // support
+    {id:"notification", group:"support", x:1040, y:340, w:220, h:70, title:"notification-service", sub:"email/SMS/push",
+      desc:"Pure consumer of domain events. FCM topic fan-out for mass broadcast. Never a dependency of the booking write path.",
+      adrs:[["ADR-021","FCM topic fan-out"],["ADR-031","processed_events dedup"]]},
+    {id:"fraud", group:"support", x:1040, y:430, w:220, h:70, title:"fraud-service", sub:"risk scoring",
+      desc:"Velocity/bulk-limit checks. Fails open by design — one signal among several, never a hard gate on its own.",
+      adrs:[["ADR-014","fail-open scoring, bulk-cancel trigger"]]},
+    {id:"analytics", group:"support", x:1040, y:520, w:220, h:60, title:"analytics-service", sub:"organizer dashboards",
+      desc:"Consumes booking/payment/ticket/event streams. Scoped by organizer_id ownership, same as event-service.",
+      adrs:[["ADR-030","organizer_id scoped queries"]]},
+
+    // data & event layer
+    {id:"pgbouncer", group:"data", x:110, y:900, w:170, h:56, title:"PgBouncer", sub:"transaction pooling",
+      desc:"One deployment per region in front of each Citus coordinator. Closes the connection-exhaustion failure mode.",
+      adrs:[["ADR-024","transaction-mode pooling"]]},
+    {id:"postgres", group:"data", x:330, y:900, w:190, h:56, title:"Postgres / Citus", sub:"sharded by event_id / user_id",
+      desc:"Source of truth. Sharded per-service, region-homed. EBS snapshot + WAL is the primary backup mechanism, pgBackRest for Compose-local dev.",
+      adrs:[["ADR-005","Citus sharding"],["ADR-026","EBS snapshot + WAL, wider outbox-replay"],["ADR-027","Flyway expand/contract"]]},
+    {id:"redis", group:"data", x:570, y:900, w:190, h:56, title:"Redis Cluster", sub:"fast gate, never authoritative",
+      desc:"Seat-hold fast path, rate-limit buckets, queue sequencer. A lost Redis degrades to slower, never wrong — and is never backed up.",
+      adrs:[["ADR-002","never authoritative, Postgres backstop"],["ADR-004","hash-tagged sharding, autoscale"]]},
+    {id:"kafka", group:"data", x:810, y:895, w:420, h:66, title:"Kafka + Debezium Outbox", sub:"event backbone",
+      desc:"Transactional Outbox → Debezium CDC → Kafka, Avro + Schema Registry. Every domain state change becomes a durable, replayable event.",
+      adrs:[["ADR-007","outbox, Avro, DLQ"],["ADR-015","Debezium replication-lag SLI"],["ADR-016","cross-region mirror (MirrorMaker 2)"]]},
+    {id:"es", group:"data", x:1280, y:900, w:180, h:56, title:"Elasticsearch", sub:"search-service's own store",
+      desc:"Read-model projection fed entirely from Kafka. Not the Tempo/Mimir/Loki observability stack — a separate cluster.",
+      adrs:[["ADR-015","distinguished from the observability ES-adjacent stack"]]}
+  ];
+
+  var EDGES = [
+    ["client","cdn","static + API","",false],
+    ["cdn","nginx","TLS terminate","",false],
+    ["nginx","gateway","app routing","",false],
+    ["gateway","auth","gRPC","ADR-023",false],
+    ["gateway","event","gRPC","ADR-023",false],
+    ["gateway","inventory","gRPC","ADR-023",false],
+    ["gateway","notification","gRPC","ADR-023",false],
+    ["auth","kafka","auth.revocation","ADR-012",true],
+    ["event","kafka","event.* outbox","ADR-007",true],
+    ["inventory","redis","seat hold, Lua atomic","ADR-002",false],
+    ["inventory","postgres","FOR UPDATE + unique idx","ADR-002",false],
+    ["booking","kafka","booking.* outbox","ADR-007",true],
+    ["payment","pgbouncer","txn-mode pool","ADR-024",false],
+    ["pgbouncer","postgres","pooled writes","",false],
+    ["payment","kafka","payment.* outbox","ADR-020",true],
+    ["ticket","kafka","ticket.issued","ADR-007",true],
+    ["kafka","search","consume → index","ADR-031",true],
+    ["kafka","notification","consume → send","ADR-031",true],
+    ["kafka","analytics","consume → aggregate","ADR-031",true],
+    ["search","es","index writes","",false],
+    ["queue","redis","admission sequencer","ADR-016",false]
+  ];
+
+  var LAYERS = [
+    {id:"edge", label:"Edge"},
+    {id:"identity", label:"Identity"},
+    {id:"catalog", label:"Catalog"},
+    {id:"core", label:"Transaction Core"},
+    {id:"support", label:"Support"},
+    {id:"data", label:"Data & Event"}
+  ];
+
+  // ---- render frames --------------------------------------------------
+  var framesG = document.getElementById("frames");
+  GROUPS.forEach(function(g){
+    el("rect", {class:"group-frame", x:g.x, y:g.y, width:g.w, height:g.h, rx:10}, framesG);
+    el("text", {class:"group-title", x:g.x+14, y:g.y+22}, framesG).textContent = g.label;
+  });
+
+  // ---- render edges ----------------------------------------------------
+  var byId = {};
+  NODES.forEach(function(n){ byId[n.id] = n; });
+
+  function anchor(n, side){
+    if (side === "bottom") return {x:n.x+n.w/2, y:n.y+n.h};
+    if (side === "top") return {x:n.x+n.w/2, y:n.y};
+    if (side === "left") return {x:n.x, y:n.y+n.h/2};
+    return {x:n.x+n.w, y:n.y+n.h/2};
+  }
+
+  var edgesG = document.getElementById("edges");
+  EDGES.forEach(function(e){
+    var a = byId[e[0]], b = byId[e[1]], label = e[2], adr = e[3], isKafka = e[4];
+    var p1, p2;
+    if (a.y <= b.y) { p1 = anchor(a,"bottom"); p2 = anchor(b,"top"); }
+    else { p1 = anchor(a,"top"); p2 = anchor(b,"bottom"); }
+    if (Math.abs(a.y - b.y) < 20) { p1 = anchor(a,"right"); p2 = anchor(b,"left"); }
+
+    var mx = (p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
+    var path = "M"+p1.x+","+p1.y+" C "+p1.x+","+my+" "+p2.x+","+my+" "+p2.x+","+p2.y;
+    var line = el("path", {
+      class:"edge"+(isKafka?" kafka":""),
+      d:path, "marker-end":"url(#arrow)",
+      "data-from":e[0], "data-to":e[1]
+    }, edgesG);
+
+    var t = el("text", {class:"edge-label", x:mx+6, y:my-4, "text-anchor":"start"}, edgesG);
+    t.textContent = label + (adr ? "  " : "");
+    if (adr){
+      var ts = el("tspan", {class:"adr"}, t);
+      ts.textContent = adr;
+    }
+  });
+
+  // ---- render nodes ------------------------------------------------
+  var nodesG = document.getElementById("nodes");
+  var nodeEls = {};
+  NODES.forEach(function(n){
+    var isStore = n.group === "data";
+    var g = el("g", {class:"node"+(isStore?" store":""), "data-id":n.id, "data-group":n.group, tabindex:"0"}, nodesG);
+    el("rect", {x:n.x, y:n.y, width:n.w, height:n.h, rx:8}, g);
+    el("text", {x:n.x+14, y:n.y+24, "font-size":"14", "font-weight":"600"}, g).textContent = n.title;
+    el("text", {class:"sub", x:n.x+14, y:n.y+42, "font-size":"10.5"}, g).textContent = n.sub;
+    g.addEventListener("click", function(){ selectNode(n.id); });
+    g.addEventListener("keydown", function(ev){ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); selectNode(n.id); } });
+    nodeEls[n.id] = g;
+  });
+
+  // ---- interactivity: selection panel --------------------------------
+  var panel = document.getElementById("panel");
+  var selected = null;
+
+  function renderPanel(n){
+    var badges = "";
+    if (n.group === "data") badges = '<span class="badge good">state / durable</span>';
+    else if (n.id === "gateway") badges = '<span class="badge good">stateless, HA</span>';
+    else if (n.id === "fraud") badges = '<span class="badge warn">fail-open</span>';
+
+    var adrItems = n.adrs.map(function(a){
+      return '<li><span class="tag">'+a[0]+'</span><span>'+a[1]+'</span></li>';
+    }).join("");
+
+    panel.innerHTML =
+      '<div class="panel-kicker">'+n.group+'</div>'+
+      '<div class="panel-title">'+n.title+'</div>'+
+      (badges ? '<div class="badges">'+badges+'</div>' : '') +
+      '<div class="panel-desc">'+n.desc+'</div>'+
+      (adrItems ? '<div class="panel-section"><h4>Decided by</h4><ul class="adr-list">'+adrItems+'</ul></div>'
+                : '<div class="panel-section"><h4>Decided by</h4><div class="empty" style="margin:0">Pass-through infrastructure — no dedicated ADR of its own.</div></div>');
+  }
+
+  function selectNode(id){
+    if (selected) nodeEls[selected].classList.remove("selected");
+    selected = id;
+    nodeEls[id].classList.add("selected");
+    renderPanel(byId[id]);
+  }
+
+  // ---- layer filter chips --------------------------------------------
+  var chipsWrap = document.getElementById("layerChips");
+  var activeLayer = null;
+  LAYERS.forEach(function(l){
+    var c = document.createElement("div");
+    c.className = "chip";
+    c.textContent = l.label;
+    c.setAttribute("tabindex", "0");
+    c.addEventListener("click", function(){
+      if (activeLayer === l.id){ activeLayer = null; c.classList.remove("active"); applyFilter(); return; }
+      Array.prototype.forEach.call(chipsWrap.children, function(x){ x.classList.remove("active"); });
+      activeLayer = l.id;
+      c.classList.add("active");
+      applyFilter();
+    });
+    chipsWrap.appendChild(c);
+  });
+
+  function applyFilter(){
+    var q = document.getElementById("search").value.trim().toLowerCase();
+    NODES.forEach(function(n){
+      var g = nodeEls[n.id];
+      var matchesLayer = !activeLayer || n.group === activeLayer;
+      var matchesSearch = !q ||
+        n.title.toLowerCase().indexOf(q) !== -1 ||
+        n.adrs.some(function(a){ return a[0].toLowerCase().indexOf(q) !== -1; });
+      var visible = matchesLayer && matchesSearch;
+      g.classList.toggle("dim", !visible);
+      g.classList.toggle("match", !!q && matchesSearch && q.length > 1);
+    });
+    Array.prototype.forEach.call(edgesG.children, function(e){
+      if (e.tagName !== "path") return;
+      var from = e.getAttribute("data-from"), to = e.getAttribute("data-to");
+      var fromN = byId[from], toN = byId[to];
+      var relevant = (!activeLayer || fromN.group===activeLayer || toN.group===activeLayer);
+      e.classList.toggle("dim", !relevant);
+    });
+  }
+
+  document.getElementById("search").addEventListener("input", applyFilter);
+})();
+</script>

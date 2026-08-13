@@ -35,6 +35,10 @@ Not started. `backend/inventory-service` is an empty directory.
   reasoning: [[ADR-002-seat-locking-strategy]].
 - Redis's role is strictly a fast-reject gate + hold-expiry scheduling
   hint — never the source of truth for PURCHASED state.
+- **Hold TTL**: 5 min base, flat across events, extended on user
+  interaction/payment-submission up to a 15 min hard ceiling. Full
+  reasoning: [[ADR-002-seat-locking-strategy]], extension mechanics in
+  [[ADR-006-saga-booking-orchestration]].
 
 ## Gap
 
@@ -43,7 +47,6 @@ but not implemented.
 
 ## Open Questions
 
-- Hold TTL duration — not decided (Ticketmaster typically 5-10 min).
 - Crash recovery: if inventory-service crashes mid-hold, how is state
   reconciled on restart — not yet designed in detail (constraint backstop
   covers correctness, but operational recovery flow not written).

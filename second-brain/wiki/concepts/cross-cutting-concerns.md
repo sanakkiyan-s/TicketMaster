@@ -13,11 +13,13 @@ became a standalone service.
 
 ## Idempotency keys
 
-Every state-changing endpoint that can be legitimately retried
-(booking-service checkout, payment-service charge/refund) must accept a
-client-supplied idempotency key and return the original result on replay
-rather than re-executing. Not yet implemented anywhere — required before
-`booking-service`/`payment-service` are built (see their Open Questions).
+Resolved — see [[ADR-025-idempotency-key-policy]]: `Idempotency-Key`
+header (client-supplied UUID v4, mirrors Stripe's own convention), key +
+request-body hash stored on the resource row itself (same shard as the
+resource, no separate table), duplicate-with-same-body replays the
+current state, duplicate-with-different-body is rejected. Not yet
+implemented anywhere — policy decided, required before
+`booking-service`/`payment-service` are built.
 
 ## Distributed tracing / observability
 
@@ -58,8 +60,6 @@ Not yet configured.
 
 ## Open Questions
 
-- Idempotency key format/storage (per-service dedup table vs. shared
-  approach) — not decided.
 - Tracing tool choice — not decided.
 - Feature flag tooling — not decided.
 - Per-entity GDPR deletion/anonymization rules — not decided.

@@ -152,36 +152,162 @@ already be over. Needs a proactive half too:
 
 ```
 PROACTIVE (scheduled, known events):
-  A capacity-planner job reads event-service's high-demand-flagged events
-  and their scheduled on-sale start times, pre-provisions extra nodes and
-  pre-splits that event's keyspace (section-level tagging, per the
-  mitigation above) BEFORE the on-sale starts — while there's no live
-  traffic, so migration is cheap and safe.
+  A SINGLE capacity-planner job runs periodically (not one job per event —
+  see coordination note below), reads ALL of event-service's high-demand-
+  flagged events with on-sale dates in the next 48h, sums their combined
+  extra-capacity need, and provisions/reshards ONCE, sequentially — well
+  ahead of the earliest on-sale (buffer time, not last-minute).
 
 REACTIVE (safety net, unpredicted virality with no advance signal):
   Prometheus + Redis exporter watches ops/sec and memory per shard.
-  Sustained threshold breach over a time window (not a single spike, to
-  avoid overreacting to noise) triggers:
+  Trigger: ops/sec > 75% of benchmarked node capacity, OR memory > 75% of
+  allocated capacity, sustained for 60 seconds (filters noise, not a
+  single-spike trigger). On breach:
     1. Add a node (Kubernetes StatefulSet scale-out)
     2. CLUSTER MEET (new node joins the cluster)
-    3. redis-cli --cluster rebalance — Redis's own built-in slot
-       redistribution tool, not hand-rolled migration logic
+    3. redis-cli --cluster reshard — targeted move of a specific slot
+       count from a specific source to the new node. NOT `--cluster
+       rebalance`, which would redistribute the WHOLE cluster evenly —
+       that would disturb unrelated low-demand events' data for no
+       reason. Reshard only touches the slots that actually need to move.
 ```
 
-**Scale-in stays manual/conservative** — auto-shrinking a stateful store
-carries real data-movement risk for uncertain benefit (traffic could spike
-again); auto scale-out only.
+**75% is a starting default, not a final number** — the correct thresholds
+can only come from real load-testing (finding where a benchmarked node
+actually starts degrading), same as any production system. Start here,
+tune from measured data once built.
+
+**"High-demand" flag criteria**: `presale signups > 3x venue capacity`
+(proxy for demand far exceeding supply) OR manual admin override (formula
+won't catch every case — a surprise celebrity announcement, day-of virality
+with no presale signal).
+
+**Capacity-planner reliability** (it's a real single point of failure for
+the proactive path if it silently fails):
+- Runs with a full buffer (~24h before the earliest flagged on-sale, not
+  minutes before) so a failure has room to retry.
+- Retries with backoff on failure.
+- Heartbeat check: if a flagged event isn't confirmed pre-scaled by
+  T-1h, alert a human — never fail silently.
+- If it still fails entirely, the REACTIVE path is still running as a
+  fallback — degraded (cold-start lag returns) but not zero protection.
+
+**Coordination across concurrently-flagged events**: exactly because it's
+one job per planning cycle (not one job per event), two events flagged
+around the same time get provisioned in the same run, sequentially —
+avoids two independent processes issuing conflicting `CLUSTER SETSLOT`
+operations against the same cluster at once.
+
+**Mechanism, for the record** (why data must be physically moved, not just
+relabeled): each Redis node's data lives only in that node's own RAM —
+nothing is shared between nodes automatically. Migrating a slot means
+`CLUSTER SETSLOT ... MIGRATING/IMPORTING`, then `MIGRATE`-ing each key's
+actual bytes from source RAM to destination RAM (one atomic op per key —
+never lost, never duplicated), and only once every key in that slot has
+physically moved does ownership finalize (`CLUSTER SETSLOT ... NODE`).
+Mid-migration reads/writes stay correct via Redis's own `ASK` redirect
+protocol — a client asking the old node for an already-moved key gets
+pointed to the new node automatically; this is handled by the Redis
+protocol and any cluster-aware client library (Lettuce/Jedis), not
+custom application code.
+
+**Honest limitation — slot-level collision, not perfect per-event
+isolation**: a slot can contain keys from multiple *different* events by
+hash coincidence (16384 slots, potentially hundreds of concurrently active
+events). Moving a flagged event's slot to a new node also moves any
+unrelated event's keys that happen to share that slot — `MIGRATE` operates
+per-key-in-slot, not per-event. Generally harmless (the new node was
+provisioned with headroom for the flagged event, so a coincidental
+passenger event's modest traffic doesn't hurt), but it means hash-tag
+sharding gives "this event's data stays together," not "this event has a
+node entirely to itself."
+
+**Scale-in** (manual, conservative — from earlier): once demand metrics
+stay low for a long cooldown window (hours, not minutes), a human
+confirms the node is genuinely idle, runs `redis-cli --cluster reshard`
+to move any remaining slots off it, then `CLUSTER FORGET` to remove it
+from the cluster, then decommissions it.
 
 **Lives in `infra/`**: Kubernetes StatefulSet for Redis nodes, Prometheus
 + Redis-exporter for metrics (ties into [[cross-cutting-concerns]]'s
 observability/tracing section), a small controller watching thresholds and
-invoking `redis-cli --cluster rebalance` on breach.
+invoking `redis-cli --cluster reshard` (targeted, not `rebalance`) on
+breach.
+
+## Amendment: the queue sequencer is a hot key this ADR's mitigation cannot fix
+
+**Gap found**: the hot-shard mitigation above splits high-demand keys by
+`{sessionId}:{sectionId}`. **That does not help the virtual queue.** The
+queue is section-agnostic and requires a single total order, so its
+sequence counter is structurally one key:
+
+```
+queue:{sessionId}:seq        <- INCR, one key, irreducible
+```
+
+It lands on exactly the shard already carrying the flagged event. The
+mitigation above addresses seat-lock keys only; applying it here is
+impossible, not merely unhelpful.
+
+**Resolution — batched sequence allocation**: each `queue-service`
+instance reserves a block with one `INCRBY queue:{sessionId}:seq 1000`
+and hands numbers out from local memory. Reduces sequencer ops on that
+key by ~1000x.
+
+Cost: ordering becomes non-strict *across instances* (instance A's block
+1000-1999 may be consumed after instance B's block 2000-2999). Acceptable
+because queue admission ordering is **randomized within a join window**,
+not strict FIFO — see [[queue-service]]. Strict FIFO would make latency
+the ordering function, which is precisely what a bot buys; randomization
+already discards exact arrival order deliberately, so batched allocation
+costs nothing the design was relying on.
+
+*Block size 1000 is a starting default, needs load-test data.*
+
+## Amendment: composite fail-open collapse (cross-cutting, no single ADR owns it)
+
+Reading this ADR together with [[ADR-002-seat-locking-strategy]],
+[[api-gateway]], [[queue-service]], and [[fraud-service]] surfaces a
+failure mode none of them states individually:
+
+```
+A Redis Cluster outage simultaneously removes:
+  1. api-gateway's business-aware rate limiting  (Redis-backed bucket)
+  2. queue-service ENTIRELY                       (Redis-only state, per
+                                                   system-overview's
+                                                   data-ownership table)
+  3. fraud-service's velocity counters
+  4. inventory-service's fast-reject gate         (fails open by ADR-002)
+
+Composite result during an on-sale: traffic arrives unthrottled,
+unqueued, unscored, and unlimited, straight into a Postgres-only
+inventory path.
+```
+
+Every individual fail-open decision is defensible on its own terms. The
+**aggregate is a coordinated collapse nobody decided on.** Two
+mitigations, both cheap:
+
+1. **Gateway rate limiting degrades, does not disappear.** On Redis
+   unreachable, fall back to a conservative in-JVM per-instance limit
+   (local token bucket, global limit ÷ instance count, biased low).
+   Approximate throttling beats none.
+2. **queue-service fails CLOSED on the on-sale path.** No queue state
+   means no valid admission token, so `inventory-service` rejects
+   on-sale bookings by default. Deliberate carve-out from this project's
+   ambient fail-open convention, on the grounds that "on-sale
+   temporarily paused" is a recoverable business event while "inventory
+   oversold to bots in 90 seconds" is not.
+
+Item 2 contradicts the fail-open expectation a reader would carry over
+from ADR-002 — named here explicitly rather than left as a silent
+inconsistency.
 
 # Revisit When
 
-- Load testing shows the hot-shard mitigation's section-split threshold
-  (how "high-demand" gets defined) is miscalibrated — too many events
-  flagged (unnecessary complexity) or too few (hot-shard risk returns).
+- Load testing shows the 75% thresholds or the "3x capacity" flag
+  criteria are miscalibrated — too aggressive (unnecessary scaling churn)
+  or too lax (hot-shard risk returns despite the mitigation).
 - If real load never approaches this scale (likely, given this is a
   portfolio project) — this ADR remains a documented "how it would be done
   at global scale," not a claim that the project's actual traffic requires
@@ -190,11 +316,6 @@ invoking `redis-cli --cluster rebalance` on breach.
 
 ## Open Questions
 
-- Exact threshold/time-window values for the reactive autoscaler (ops/sec,
-  memory %, sustained-breach duration) — not decided, needs real load-test
-  data.
-- "High-demand" flag criteria (presale signup count threshold, etc.) — not
-  decided.
-- Capacity-planner job's own reliability (what if it fails to pre-scale
-  before a scheduled on-sale?) — not designed, itself a single point of
-  failure for the proactive path.
+- Exact node-capacity benchmark numbers behind the 75% threshold (ops/sec,
+  memory in absolute terms) — the percentage is decided, the underlying
+  per-node ceiling it's a percentage OF still needs real load-test data.
