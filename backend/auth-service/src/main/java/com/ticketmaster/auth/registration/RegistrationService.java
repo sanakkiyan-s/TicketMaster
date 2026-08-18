@@ -1,7 +1,7 @@
-package com.ticketmaster.auth.service;
+package com.ticketmaster.auth.registration;
 
-import com.ticketmaster.auth.domain.User;
-import com.ticketmaster.auth.domain.UserRepository;
+import com.ticketmaster.auth.user.User;
+import com.ticketmaster.auth.user.UserRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -11,20 +11,20 @@ import java.time.Clock;
 import java.time.Instant;
 
 @Service
-public class RegistrationService {
+class RegistrationService {
 
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
     private final Clock clock;
 
-    public RegistrationService(UserRepository users, PasswordEncoder passwordEncoder, Clock clock) {
+    RegistrationService(UserRepository users, PasswordEncoder passwordEncoder, Clock clock) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.clock = clock;
     }
 
     @Transactional
-    public User register(String email, String rawPassword) {
+    User register(String email, String rawPassword) {
         // Cheap pre-check purely so the common case returns a clean 409
         // without burning a hash and a failed INSERT. It is NOT the
         // correctness mechanism: two concurrent registrations for the same

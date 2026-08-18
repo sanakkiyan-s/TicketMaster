@@ -1,4 +1,4 @@
-package com.ticketmaster.auth.api;
+package com.ticketmaster.auth.registration;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;

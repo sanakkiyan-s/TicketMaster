@@ -1,4 +1,4 @@
-package com.ticketmaster.auth.service;
+package com.ticketmaster.auth.registration;
 
 public class EmailAlreadyRegisteredException extends RuntimeException {
 

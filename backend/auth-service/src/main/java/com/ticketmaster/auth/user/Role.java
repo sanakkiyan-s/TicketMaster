@@ -1,4 +1,4 @@
-package com.ticketmaster.auth.domain;
+package com.ticketmaster.auth.user;
 
 /**
  * Role names as stored in user_roles.role and later emitted in the JWT

@@ -1,4 +1,4 @@
-package com.ticketmaster.auth.api;
+package com.ticketmaster.auth.registration;
 
 import java.util.Set;
 import java.util.UUID;

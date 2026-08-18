@@ -1,4 +1,4 @@
-package com.ticketmaster.auth.domain;
+package com.ticketmaster.auth.user;
 
 import jakarta.persistence.*;
 

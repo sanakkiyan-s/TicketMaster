@@ -1,9 +1,9 @@
 package com.ticketmaster.auth;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ticketmaster.auth.domain.Role;
-import com.ticketmaster.auth.domain.User;
-import com.ticketmaster.auth.domain.UserRepository;
+import com.ticketmaster.auth.user.Role;
+import com.ticketmaster.auth.user.User;
+import com.ticketmaster.auth.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -154,5 +154,41 @@ class RegistrationTest {
         // (ADR-030) — those are the roles that bypass ownership checks.
         User stored = users.findByEmail("roles@example.com").orElseThrow();
         assertEquals(java.util.Set.of(Role.USER), stored.getRoles());
+    }
+
+    @Test
+    void reportsErrorsAsProblemDetail() throws Exception {
+        // One error shape for the whole API (RFC 9457). ADR-034 publishes
+        // this contract via generated OpenAPI, so the shape must not vary
+        // per endpoint.
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body("dupe2@example.com", "correct-horse-battery")))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body("dupe2@example.com", "correct-horse-battery")))
+                .andExpect(status().isConflict())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.title").value("Email already registered"));
+    }
+
+    @Test
+    void validationErrorNamesTheFieldButNeverEchoesTheValue() throws Exception {
+        String password = "tooshort";
+
+        String response = mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body("valid@example.com", password)))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                .andExpect(jsonPath("$.errors.password").exists())
+                .andReturn().getResponse().getContentAsString();
+
+        // A rejected password must never come back in the body — it would
+        // then sit in every access log between here and the browser.
+        assertFalse(response.contains(password), "response echoed the rejected password");
     }
 }
