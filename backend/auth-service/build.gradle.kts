@@ -17,6 +17,21 @@ dependencies {
     // generated at the gateway would be empty or hand-written; both
     // defeat the point. The gateway aggregates these instead.
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.9")
+
+    // spring-vault-core (VaultTemplate), NOT spring-cloud-vault-config.
+    //
+    // spring-cloud-vault-config loads secrets as a Spring PropertySource at
+    // bootstrap, which is frozen for the life of the context. ADR-012's
+    // rotation changes the signing key set WHILE the service runs — phase 1
+    // publishes K2 before anything signs with it — so the key set has to be
+    // re-readable at runtime. A PropertySource cannot express that; a
+    // VaultTemplate read on an interval can.
+    //
+    // Version pinned: Boot manages spring-vault only via the Spring Cloud Vault
+    // BOM, which this project does not import.
+    implementation("org.springframework.vault:spring-vault-core:3.1.2")
+
+    testImplementation("org.testcontainers:vault:1.21.4")
 }
 
 // First module with a @SpringBootApplication main class, so the first to

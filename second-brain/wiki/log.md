@@ -952,3 +952,61 @@ notification design discussed earlier (KodeKloud FCM/pub-sub comparison).
 - Still not implemented: the `/refresh` endpoint itself (reuse detection,
   family revocation), which is what the `family_id`/`used_at` columns exist
   for.
+
+## 2026-08-18 (cont. - Vault-backed signing keys)
+
+### Decided
+- **`spring-vault-core` (VaultTemplate), NOT `spring-cloud-vault-config`** -
+  a correction to ADR-010's own startup sketch, which describes loading Vault
+  secrets as a Spring `PropertySource`. That is right for static secrets and
+  wrong for signing keys: a PropertySource is resolved at bootstrap and frozen
+  for the life of the context, while ADR-012's rotation changes the key set
+  WHILE the service runs. Phase 1 publishes K2 before anything signs with it,
+  which a frozen PropertySource cannot represent. VaultTemplate re-reads on an
+  interval (60s, well under the ~15 min phase-1 window).
+- **Scope held to KV v2 only.** ADR-010 specifies four engines; JWT keys need
+  one. Transit is explicitly excluded by that ADR (a network round trip per
+  signature on the highest-QPS service is the wrong trade), and the dynamic
+  Postgres credentials piece - which the ADR itself flags as "most likely to
+  bite" - is left for its own slice rather than dragged in here.
+- **Token auth locally, AppRole deferred.** ADR-010 requires AppRole with a
+  response-wrapped secret_id, whose value is that an attacker who unwraps it
+  first makes the unwrap FAIL, so compromise is detectable. A static token
+  gives up that signal, so it stays a dev-only path.
+
+### Added
+- `jwt/VaultSigningKeyProvider`, `jwt/VaultConfig`, `jwt/VaultKeyProperties`,
+  `jwt/KeyCodec`, `jwt/KeyStatus`, `jwt/Thumbprint`.
+- `auth.jwt.vault.*` config, and `spring-vault-core:3.1.2` (version pinned -
+  Boot manages spring-vault only through the Spring Cloud Vault BOM, which
+  this project does not import).
+- `VaultSigningKeyProviderTest` - 6 tests against a real Vault container.
+
+### Notes
+- **`KeyStatus` is what makes rotation representable.** A PUBLISHED key is in
+  JWKS and accepted by gateways but signs nothing; exactly one key may be
+  SIGNING, and the provider throws if two are. Without that distinction
+  "publish then cut over" collapses into "cut over", and every warm-cached
+  gateway rejects every token for up to one cache TTL.
+- Tested against a real Vault rather than a mocked VaultTemplate. A mock would
+  only prove the class calls the methods it calls; the real failure modes here
+  are KV v2 nesting the payload under `data` and base64 DER surviving a round
+  trip, neither of which a mock can catch. One test recomputes the RFC 7638
+  thumbprint from the decoded key, so a mangled modulus changes the kid and
+  fails.
+- The provider fails fast at construction if there is no SIGNING key: a service
+  that starts without one answers every login with a 500, which reads as a bug
+  in login rather than a missing secret.
+- Vault being briefly unreachable does NOT stop token issuance - the cached key
+  set stays in memory and is served with a WARN. Only a cold start with no
+  cache fails.
+- `bootstrap-if-empty` (default false) lets a fresh local Vault work with no
+  seeding step. It means the service mints its own key, so it must never be
+  set in production.
+- **The ephemeral provider is kept**, not deleted: it lets the service and its
+  tests run with no Vault at all. `auth.jwt.key-source` still defaults to
+  `ephemeral`; switching the default to `vault` is a deployment decision, not
+  a code one.
+- 31 tests green; `./gradlew build` passes on all 15 modules.
+- Still open: ADR-012's four-phase rotation is now REPRESENTABLE but not
+  implemented - no KeyRotationService advances the phases yet.

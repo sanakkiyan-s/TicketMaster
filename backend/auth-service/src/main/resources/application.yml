@@ -46,6 +46,21 @@ auth:
     # until it does.
     key-source: ${JWT_KEY_SOURCE:ephemeral}
 
+    vault:
+      uri: ${VAULT_URI:http://localhost:8200}
+      # Dev-mode root token from infra/docker-compose.yml. ADR-010 requires
+      # AppRole with a response-wrapped secret_id in production, and the
+      # Kubernetes auth method on k8s.
+      token: ${VAULT_TOKEN:dev-root-token}
+      backend: ${VAULT_KV_BACKEND:secret}
+      path: ${VAULT_JWT_PATH:auth-service/jwt-keys}
+      # Well under ADR-012's ~15 min phase-1 window, so every replica has seen
+      # a newly published key long before anything signs with it.
+      refresh-interval: PT60S
+      # Lets a fresh local Vault work with no manual seeding. Never in
+      # production: it means the service will mint its own signing key.
+      bootstrap-if-empty: ${JWT_VAULT_BOOTSTRAP:false}
+
   refresh-cookie:
     # Secure means the browser never sends it over plaintext HTTP. True by
     # default because getting this wrong exposes a 30-day credential on the

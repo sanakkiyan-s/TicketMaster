@@ -5,10 +5,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
@@ -58,7 +56,7 @@ class EphemeralSigningKeyProvider implements SigningKeyProvider {
 
         RSAPublicKey publicKey = (RSAPublicKey) pair.getPublic();
         this.key = new SigningKey(
-                thumbprint(publicKey),
+                Thumbprint.of(publicKey),
                 publicKey,
                 (RSAPrivateKey) pair.getPrivate());
 
@@ -77,24 +75,4 @@ class EphemeralSigningKeyProvider implements SigningKeyProvider {
         return List.of(key);
     }
 
-    /**
-     * kid as the RFC 7638 JWK thumbprint: SHA-256 over the canonical JSON of
-     * the public key's required members, lexicographically ordered, no
-     * whitespace.
-     *
-     * Derived from the key rather than a counter or random string, which
-     * buys two things during rotation: the same key always yields the same
-     * kid whoever computes it, and two different keys cannot collide.
-     */
-    private static String thumbprint(RSAPublicKey publicKey) {
-        String canonical = "{\"e\":\"" + Base64Url.of(publicKey.getPublicExponent())
-                + "\",\"kty\":\"RSA\",\"n\":\"" + Base64Url.of(publicKey.getModulus()) + "\"}";
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(canonical.getBytes(StandardCharsets.UTF_8));
-            return Base64Url.of(digest);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 unavailable", e);
-        }
-    }
 }
