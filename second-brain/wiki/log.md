@@ -718,3 +718,52 @@ notification design discussed earlier (KodeKloud FCM/pub-sub comparison).
   single-node dev Postgres has nothing to distribute across. The
   distribution migration is deferred and must not be forgotten before a
   real multi-node cluster exists.
+
+## 2026-08-14 (cont. - service internal architecture)
+
+### Added
+- `wiki/decisions/ADR-037-service-internal-architecture.md` - package by
+  feature, cross-cutting concerns by type. Closes a gap 36 ADRs had left
+  open: nothing anywhere said how a single service is organised
+  internally, so auth-service had been written with the Spring default
+  and no recorded reason.
+
+### Decisions
+- **Package by feature.** Decided on compiler enforcement rather than
+  preference: with a feature's classes in one package the service class
+  can be package-private, so another feature calling it fails to
+  compile. Package-by-layer forces every class public and can only
+  document the boundary. Same reasoning shape as ADR-002's
+  unique-constraint backstop and ADR-025's colocated body hash - make
+  the mistake unrepresentable rather than discouraged.
+- **No layer sub-folders inside a feature** (`registration/controller/`
+  would be a separate package again, forcing the service public and
+  discarding the benefit). A feature that outgrows one folder splits by
+  sub-feature: `token/keys/`, `token/jwks/`.
+- **One error shape per service**: `@RestControllerAdvice` in `shared/`
+  returning RFC 9457 `ProblemDetail`. Per-controller handlers produced
+  two different shapes from one API, and ADR-034 publishes that shape as
+  the OpenAPI contract.
+- **Lombok policy**: `@Getter` permitted; `@Data`, `@Setter`,
+  `@ToString`, `@EqualsAndHashCode` forbidden on JPA entities -
+  `@ToString` would print a password hash into any log line touching a
+  User, `@EqualsAndHashCode` breaks under JPA field population and lazy
+  loading, `@Setter` defeats the constructor's invariants.
+- **Hexagonal rejected for now, on cost not principle.** For services
+  whose domain rules are "validate, hash, insert" the mapper layer is
+  ceremony. Named revisit trigger: inventory-service and
+  booking-service, where the real invariants live.
+
+### Changed
+- auth-service restructured to the new layout (commit 6535dc7):
+  `config/`, `shared/`, `user/`, `registration/`. `RegistrationService`
+  is now package-private.
+- `user/User.java` - Lombok `@Getter` replaces five hand-written
+  accessors; `getRoles()` stays hand-written because it returns a
+  defensive copy, so a caller cannot grant itself a role by mutating the
+  set it was handed.
+- `wiki/index.md` - ADR-037 indexed.
+
+### Notes
+- 12 tests green across auth-service; `./gradlew build` passes on all 15
+  modules after the restructure.

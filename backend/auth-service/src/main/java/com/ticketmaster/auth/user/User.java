@@ -1,6 +1,7 @@
 package com.ticketmaster.auth.user;
 
 import jakarta.persistence.*;
+import lombok.Getter;
 
 import java.time.Instant;
 import java.util.HashSet;
@@ -8,11 +9,19 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * A user account. Owns credentials and roles only — profile data lives in
+ * A user account. Owns credentials and roles only - profile data lives in
  * user-service (ADR-001).
+ *
+ * Lombok @Getter only, deliberately not @Data or @Setter. On a JPA entity
+ * holding a password hash those are actively harmful: @ToString prints the
+ * hash into any log line that touches a User; @EqualsAndHashCode includes
+ * every field, so hashCode changes as JPA populates them and equality can
+ * trigger a lazy load; @Setter makes every field mutable, defeating the
+ * constructor that establishes the invariants.
  */
 @Entity
 @Table(name = "users")
+@Getter
 public class User {
 
     @Id
@@ -55,26 +64,10 @@ public class User {
         this.roles.add(Role.USER);
     }
 
-    public UUID getId() {
-        return id;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public String getPasswordHash() {
-        return passwordHash;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
-    }
-
+    /**
+     * Hand-written, overriding Lombok: returns a copy so a caller cannot
+     * grant itself a role by mutating the set it was handed.
+     */
     public Set<String> getRoles() {
         return Set.copyOf(roles);
     }

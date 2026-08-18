@@ -144,6 +144,20 @@ into standalone flow pages.
   (one message, not N sends), explicitly handing the resulting traffic
   to queue-service rather than solving the stampede itself. Also
   surfaced via external-reference comparison.
+- [[ADR-037-service-internal-architecture]] - closes a gap 36 ADRs left
+  open: how a single service is organised inside. Package by feature
+  (`registration/`, `login/`, `token/`) with cross-cutting concerns by
+  type (`config/`, `shared/`, plus a shared domain package). Decided on
+  enforcement, not taste: a feature's classes sit in one package so the
+  service class can be package-private and the compiler refuses
+  cross-feature reaches, which package-by-layer can only ask for
+  politely. Explicitly forbids sub-dividing a feature by layer (that
+  re-splits the package and forces public again), mandates one RFC 9457
+  `ProblemDetail` shape per service since ADR-034 publishes it as
+  contract, and bans `@Data`/`@ToString`/`@EqualsAndHashCode` on JPA
+  entities. Hexagonal rejected on cost for CRUD-shaped services, with
+  inventory/booking named as the revisit trigger. auth-service is the
+  reference implementation.
 - [[ADR-036-build-order-and-phasing]] — closes the vault's oldest open
   question. Six dependency-ordered phases (bootstrap → identity/edge →
   catalog → transaction core → support consumers → secondary features →
