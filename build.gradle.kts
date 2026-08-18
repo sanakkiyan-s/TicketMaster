@@ -57,6 +57,25 @@ subprojects {
         // service. Remove once Testcontainers ships a client that
         // negotiates correctly against Engine 29+.
         systemProperty("api.version", "1.44")
+
+        // -1 disables the gRPC server. The root build gives every module
+        // grpc-spring-boot-starter (ADR-023), which binds 9090 on context
+        // startup; each @SpringBootTest class boots its own context, so
+        // the second one fails with "Address already in use". No module
+        // serves gRPC yet.
+        //
+        // A system property, NOT a src/test/resources/application.yml:
+        // Spring resolves classpath:/application.yml to the FIRST match on
+        // the classpath, so a test-side file does not merge with the
+        // service's config — it replaces it wholesale, and the service
+        // then runs its tests against defaults it never configured. That
+        // failure is silent. This override cannot shadow anything.
+        systemProperty("grpc.server.port", "-1")
+
+        // Testcontainers logs every container lifecycle event at INFO,
+        // which buries real assertion failures in the report.
+        systemProperty("logging.level.org.testcontainers", "WARN")
+        systemProperty("logging.level.com.github.dockerjava", "WARN")
     }
 
     // No module has a @SpringBootApplication main class yet (Phase 0 is

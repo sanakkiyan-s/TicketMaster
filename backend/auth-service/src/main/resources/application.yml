@@ -26,6 +26,18 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
+springdoc:
+  api-docs:
+    # Always on: this is what api-gateway aggregates and what CI diffs for
+    # contract drift (ADR-034). It is an internal endpoint, not a public
+    # one — see SecurityConfig.
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    # Human browsing surface. Off in production; there is no reason to
+    # ship an interactive API explorer to the internet edge.
+    enabled: ${SWAGGER_UI_ENABLED:true}
+
 management:
   endpoints:
     web:

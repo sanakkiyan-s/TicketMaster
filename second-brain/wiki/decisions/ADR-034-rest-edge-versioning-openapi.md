@@ -4,7 +4,7 @@ type: decision
 sources: []
 related: [[api-gateway]], [[ADR-008-testing-strategy]], [[ADR-023-grpc-internal-service-calls]], [[frontend]]
 created: 2026-08-13
-last-updated: 2026-08-13
+last-updated: 2026-08-18
 ---
 
 Status: Accepted
@@ -96,6 +96,38 @@ truth, never drifts, never hand-maintained" pattern (Avro/Schema
 Registry for Kafka, `.proto`/`buf breaking` for gRPC) applied to the one
 remaining REST surface, rather than inventing a fourth contract
 philosophy for it.
+
+# Amendment (2026-08-18) — generation is per-service, not gateway-only
+
+The original text said springdoc runs on `api-gateway`, with per-service
+doc surfaces as an "and/or ... not needed today" fallback. Implementing
+the first real endpoint inverted that: **the fallback is the answer.**
+
+Spring Cloud Gateway proxies routes; it does not see the annotated types.
+`RegisterRequest`'s `@Size(min = 12)` lives in auth-service, so a spec
+generated at the gateway would be either empty or hand-written — and
+hand-written is exactly what this ADR exists to forbid. Each service
+therefore runs `springdoc-openapi-starter-webmvc-ui` and publishes its own
+`/v3/api-docs`; `api-gateway` (reactive, so `-webflux-ui`) aggregates them
+into one Swagger UI. The "generated from the source of truth" principle is
+unchanged; only the location of generation moves.
+
+Version line: `2.8.x`, not the `2.6.0` originally pinned on api-gateway.
+2.6.0 targets Spring Boot 3.3; this repo is on 3.5.6. Both modules now use
+`2.8.9`.
+
+Exposure: the spec and Swagger UI are permitted **unauthenticated at the
+service**, which is only safe because they are internal. `api-gateway`
+must not route `/v3/api-docs` or `/swagger-ui` publicly, and
+`SWAGGER_UI_ENABLED=false` in production. A publicly reachable spec hands
+an attacker the complete endpoint and field inventory.
+
+Drift gate, concretely: `OpenApiSpecTest` regenerates
+`backend/<service>/openapi/<service>.json` on every `test` run. CI then
+runs `git diff --exit-code openapi/` and flags a changed contract. The
+`servers` block is pinned to `/` rather than inferred from the request, or
+the committed spec would carry a random localhost port and the diff would
+fire every run for no contract reason.
 
 # Consequences
 

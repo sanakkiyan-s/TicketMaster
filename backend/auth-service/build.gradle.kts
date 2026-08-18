@@ -6,6 +6,17 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
     implementation("org.springframework.kafka:spring-kafka") // auth.revocation topic (ADR-012 amendment)
+
+    // ADR-034: the OpenAPI spec is GENERATED from the controllers, never
+    // hand-written, so it cannot drift from the code the way a separate
+    // document would. webmvc (not webflux) — api-gateway is reactive,
+    // every downstream service is servlet-based.
+    //
+    // Per-service rather than gateway-only: Spring Cloud Gateway proxies
+    // routes, it does not see RegisterRequest's constraints. A spec
+    // generated at the gateway would be empty or hand-written; both
+    // defeat the point. The gateway aggregates these instead.
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.9")
 }
 
 // First module with a @SpringBootApplication main class, so the first to

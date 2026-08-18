@@ -57,6 +57,16 @@ public class SecurityConfig {
                         // ADR-032: probes must answer without credentials,
                         // or a healthy pod looks unhealthy to Kubernetes.
                         .requestMatchers("/actuator/health/**").permitAll()
+
+                        // The generated spec and its viewer (ADR-034).
+                        // Unauthenticated ON PURPOSE, but only safe
+                        // because these are not public: api-gateway must
+                        // not route /v3/api-docs or /swagger-ui to the
+                        // internet, and SWAGGER_UI_ENABLED is set false in
+                        // production. An openly reachable spec hands an
+                        // attacker the full endpoint and field inventory.
+                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
+                        .permitAll()
                         .anyRequest().authenticated()
                 )
 
