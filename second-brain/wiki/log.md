@@ -890,3 +890,65 @@ notification design discussed earlier (KodeKloud FCM/pub-sub comparison).
 - Not implemented: login itself (this only mints a token from an
   already-established identity), refresh with reuse detection, the
   four-phase rotation, the Vault provider, the auth.revocation producer.
+
+## 2026-08-18 (cont. — login, and CI decided)
+
+### Decided
+- **CI platform: GitHub Actions** - [[ADR-038-ci-platform]], closing an Open
+  Decision the roadmap had carried since it was written. It stopped being
+  theoretical once three ADRs were depending on a runner that did not exist:
+  ADR-034's spec-drift diff, ADR-023's `buf breaking`, and ADR-008's
+  Testcontainers tier (which needs a real Docker daemon). `ubuntu-latest`
+  provides that daemon with no setup step, and the repo is already on GitHub.
+  GitLab CI would have cost a migration to buy a better DSL; Jenkins is a
+  server somebody has to operate, which for a solo project is the worst trade
+  on the list.
+- **Refresh token ships as an httpOnly cookie, access token in the body.** Not
+  previously specified by ADR-012, which defines the token design but not its
+  delivery. A refresh token readable by JavaScript is stealable by any XSS,
+  and it is a 30-day credential - far more valuable to a thief than a 10-minute
+  access token. Cookie is `HttpOnly; Secure; SameSite=Strict;
+  Path=/api/v1/auth`; SameSite=Strict is also what makes CSRF on the refresh
+  endpoint a non-issue while the service stays CSRF-disabled.
+
+### Added
+- `login/` - `LoginRequest`, `LoginResponse`, `LoginService`,
+  `LoginController` (`POST /api/v1/auth/login`), `RefreshCookie`,
+  `InvalidCredentialsException`.
+- `token/` - `RefreshToken` entity, `RefreshTokenRepository`,
+  `RefreshTokenService`, `IssuedRefreshToken`, `TokenHashing`. Fills in the
+  `refresh_tokens` table that V1 created and nothing used.
+- `jwt/TokenMinting` - the jwt package's only public edge. `AccessTokenIssuer`
+  stays package-private so nothing outside `jwt/` can reach the class holding a
+  private key, or reach `SigningKeyProvider` and pull the key material itself.
+- `.github/workflows/ci.yml` - backend (JDK 21, Gradle cache, `./gradlew
+  build`, spec-drift check, test reports on `if: always()`) and frontend
+  (Node 20, `npm ci`, typecheck, build).
+- `LoginTest` - 6 tests.
+
+### Notes
+- **Three deliberate anti-enumeration measures, which are the substance of this
+  slice:**
+  1. Unknown email and wrong password throw the same exception and produce
+     **byte-identical** 401 bodies. A test asserts the two response strings are
+     equal, not merely that both are 401.
+  2. `LoginService` verifies the submitted password against a **dummy BCrypt
+     hash** when the email does not exist. Without it, a missing user returns
+     immediately while a real one pays ~250ms of BCrypt - a timing difference
+     measurable over the network that leaks exactly what the identical message
+     was hiding. The dummy's strength must stay at 12 to match the real
+     encoder, or the leak reopens.
+  3. `LoginRequest` deliberately omits `@Email` and the 12-char minimum.
+     Restating registration's policy on the login form would tell an attacker
+     the rule, and a 400 for "malformed" versus 401 for "wrong" is itself an
+     oracle. The `@Size` caps remain, as DoS guards - without them a 10 MB
+     "password" reaches deliberately-slow BCrypt.
+- Refresh tokens are hashed with **SHA-256, unsalted, not bcrypt** (ADR-012).
+  The token is 256 bits of CSPRNG output, so there is nothing to brute-force;
+  bcrypt's work factor would add ~250ms of CPU to the endpoint every active
+  session hits every 10 minutes, for zero security. Unsalted because lookup is
+  BY the hash and two 256-bit random values are never equal.
+- 25 tests green across auth-service.
+- Still not implemented: the `/refresh` endpoint itself (reuse detection,
+  family revocation), which is what the `family_id`/`used_at` columns exist
+  for.

@@ -1,0 +1,110 @@
+# CI for the whole monorepo (ADR-038).
+#
+# Two independent jobs, not one. A broken frontend build must not hide a
+# broken backend build or vice versa — with one job the first failure masks
+# everything after it, and on a monorepo that means one red X and no idea
+# which half is wrong.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run's result worthless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The ADR-034 spec-drift check below diffs the working tree against
+          # the committed spec, so a shallow clone is fine — but the diff needs
+          # the file itself, so no sparse checkout.
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Caches ~/.gradle/caches and ~/.gradle/wrapper, and reads the build
+      # cache. Without this every run re-downloads the entire Spring Boot
+      # dependency graph for 15 modules.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # No docker setup step: ubuntu-latest ships a running Docker daemon, which
+      # ADR-008's integration tier needs — every @SpringBootTest here starts a
+      # real Postgres via Testcontainers rather than mocking the database.
+      - name: Build and test
+        run: ./gradlew build --no-daemon --stacktrace
+
+      # ADR-034's drift gate. The test run above REGENERATES
+      # backend/*/openapi/*.json from the live controllers, so a changed REST
+      # contract shows up as a dirty working tree here.
+      #
+      # Flags, never blocks: pre-launch REST evolution is deliberately more
+      # fluid than ADR-023's `buf breaking` gate for gRPC, which does block.
+      # continue-on-error keeps the job green while still surfacing the diff.
+      - name: Check OpenAPI spec drift
+        id: spec-drift
+        continue-on-error: true
+        run: |
+          if git diff --exit-code -- 'backend/*/openapi/*.json'; then
+            echo "no REST contract change"
+          else
+            echo "::warning title=OpenAPI spec drift::The generated spec differs from the committed one. Commit the regenerated spec, and if a field was removed or retyped, bump the API version per ADR-034."
+            git diff --stat -- 'backend/*/openapi/*.json'
+            exit 1
+          fi
+
+      - name: Upload test reports
+        # Reports matter most when the build failed, so this must not be
+        # skipped by the default success() condition.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: |
+            backend/*/build/reports/tests/
+            backend/*/build/test-results/
+          retention-days: 7
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `ci`, not `install`: it installs exactly the lockfile and fails if
+      # package.json and the lock disagree. `npm install` would silently
+      # resolve new versions, so CI would be testing dependencies that no
+      # developer has.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build

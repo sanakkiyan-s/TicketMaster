@@ -158,6 +158,16 @@ into standalone flow pages.
   entities. Hexagonal rejected on cost for CRUD-shaped services, with
   inventory/booking named as the revisit trigger. auth-service is the
   reference implementation.
+- [[ADR-038-ci-platform]] - GitHub Actions, one workflow, two independent
+  jobs (backend / frontend) so one half's failure cannot mask the other's.
+  Chosen because the repo is already on GitHub and `ubuntu-latest` ships a
+  running Docker daemon, which ADR-008's Testcontainers tier requires with
+  no setup step; GitLab CI would have cost a migration for a nicer DSL, and
+  Jenkins is a server somebody has to operate. Makes ADR-034's OpenAPI
+  drift gate real for the first time - as a `::warning` that flags rather
+  than blocks, matching that ADR's own wording, unlike ADR-023's
+  `buf breaking`, which blocks. No deploy step: deployment is still blocked
+  on the IaC and manifest-delivery Open Decisions.
 - [[ADR-036-build-order-and-phasing]] — closes the vault's oldest open
   question. Six dependency-ordered phases (bootstrap → identity/edge →
   catalog → transaction core → support consumers → secondary features →

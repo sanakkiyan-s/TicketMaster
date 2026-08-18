@@ -1,5 +1,6 @@
 package com.ticketmaster.auth.shared;
 
+import com.ticketmaster.auth.login.InvalidCredentialsException;
 import com.ticketmaster.auth.registration.EmailAlreadyRegisteredException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -40,6 +41,23 @@ public class ApiExceptionHandler {
     public ProblemDetail handleEmailAlreadyRegistered(EmailAlreadyRegisteredException e) {
         ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.CONFLICT);
         problem.setTitle("Email already registered");
+        return problem;
+    }
+
+    /**
+     * 401 with NO detail, and identically for unknown-email and wrong-password.
+     *
+     * The temptation is to be helpful ("no account with that address"). That
+     * single kindness converts the login endpoint into an account-enumeration
+     * oracle: an attacker feeds a breach list through it and learns which
+     * addresses are registered here without guessing a single password.
+     * LoginService also equalises the TIMING, since a fast rejection leaks the
+     * same fact that a different message would.
+     */
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ProblemDetail handleInvalidCredentials(InvalidCredentialsException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+        problem.setTitle("Invalid credentials");
         return problem;
     }
 

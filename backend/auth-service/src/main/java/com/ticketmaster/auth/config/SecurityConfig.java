@@ -54,6 +54,14 @@ public class SecurityConfig {
 
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/register").permitAll()
+
+                        // Login must be reachable without a credential — it is
+                        // where credentials are exchanged. Rate limiting at the
+                        // gateway (ADR-014) is what keeps it from being a free
+                        // password-guessing endpoint; BCrypt strength 12 makes
+                        // each guess expensive for the attacker AND for us,
+                        // which is exactly why the throttle is not optional.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
                         // ADR-032: probes must answer without credentials,
                         // or a healthy pod looks unhealthy to Kubernetes.
                         .requestMatchers("/actuator/health/**").permitAll()

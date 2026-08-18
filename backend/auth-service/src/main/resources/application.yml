@@ -46,6 +46,13 @@ auth:
     # until it does.
     key-source: ${JWT_KEY_SOURCE:ephemeral}
 
+  refresh-cookie:
+    # Secure means the browser never sends it over plaintext HTTP. True by
+    # default because getting this wrong exposes a 30-day credential on the
+    # wire; overridable only because local dev has no TLS (Chrome treats
+    # localhost as a secure context, so it works there anyway).
+    secure: ${REFRESH_COOKIE_SECURE:true}
+
 springdoc:
   api-docs:
     # Always on: this is what api-gateway aggregates and what CI diffs for
