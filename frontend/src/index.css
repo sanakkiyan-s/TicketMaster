@@ -99,5 +99,96 @@
 
   body {
     @apply bg-background text-foreground;
+
+    /*
+     * System font stack, NOT the Inter webfont the design pass suggested.
+     * A Google Fonts <link> is a stylesheet from fonts.googleapis.com, and
+     * index.html pins `style-src-elem 'self'` for ADR-011's PCI SAQ A
+     * scope — the browser would refuse it and silently fall back anyway.
+     * Self-hosting Inter would satisfy the CSP; that is a deliberate
+     * follow-up, not something to smuggle in by loosening the policy.
+     */
+    font-family:
+      system-ui,
+      -apple-system,
+      "Segoe UI",
+      Roboto,
+      "Helvetica Neue",
+      Arial,
+      sans-serif;
+  }
+
+  /*
+   * Motion is opt-in, not opt-out. Anyone who has asked their OS to reduce
+   * motion has usually asked because motion makes them ill.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /*
+   * Liquid-glass surface, translated from Apple's iOS 26 material to CSS.
+   *
+   * The iOS API (.glassEffect(), UIGlassEffect) has no web equivalent, so
+   * what carries over is the intent: blur what is behind, let surrounding
+   * colour through, and keep a bright edge so the panel reads as a physical
+   * layer rather than a flat box.
+   *
+   * Two rules from that design language are load-bearing here:
+   *   - Glass goes on containers and controls, never on everything. The page
+   *     background below is what there is to see THROUGH; if it were glass
+   *     too there would be nothing behind it.
+   *   - Text on glass must still clear 4.5:1. The panel is deliberately far
+   *     more opaque than a pretty screenshot would want, because a login
+   *     form that cannot be read is a broken login form.
+   */
+  .glass-panel {
+    background-color: color-mix(in oklab, var(--card) 82%, transparent);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+    box-shadow:
+      0 1px 0 0 color-mix(in oklab, white 55%, transparent) inset,
+      0 10px 40px -12px rgb(0 0 0 / 35%);
+  }
+
+  .dark .glass-panel {
+    background-color: color-mix(in oklab, var(--card) 72%, transparent);
+    box-shadow:
+      0 1px 0 0 color-mix(in oklab, white 8%, transparent) inset,
+      0 20px 60px -20px rgb(0 0 0 / 70%);
+  }
+
+  /*
+   * backdrop-filter is unsupported or disabled often enough (older Firefox,
+   * some Linux GPUs, forced-colors mode) that the fallback has to be a
+   * decision rather than an accident: go opaque, keep the text readable.
+   */
+  @supports not (backdrop-filter: blur(1px)) {
+    .glass-panel {
+      background-color: var(--card);
+    }
+  }
+
+  /* What the glass has to refract. Sits behind everything, never interactive. */
+  .auth-backdrop::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      radial-gradient(60% 50% at 15% 15%, oklch(0.72 0.17 258 / 42%) 0%, transparent 60%),
+      radial-gradient(55% 45% at 85% 20%, oklch(0.72 0.2 330 / 34%) 0%, transparent 62%),
+      radial-gradient(60% 55% at 50% 100%, oklch(0.78 0.17 155 / 30%) 0%, transparent 60%);
   }
 }
