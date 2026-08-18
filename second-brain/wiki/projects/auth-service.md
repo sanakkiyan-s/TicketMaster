@@ -55,6 +55,20 @@ ADR-036 Phase 1). Verified against `backend/auth-service/src/`:
   `OpenApiSpecTest` on every test run. ADR-034's CI drift diff has nothing
   to compare against unless this file is rewritten every build; a dirty
   working tree after `test` is the drift signal, not a bug.
+- `jwt/` — `SigningKey`, `SigningKeyProvider`,
+  `EphemeralSigningKeyProvider`, `Base64Url`, `JwtProperties`,
+  `AccessTokenIssuer` (RS256, ADR-012's claim set), `JwksController`
+  (`GET /.well-known/jwks.json`, `Cache-Control: max-age=300`).
+  `AccessTokenIssuer` knows nothing about credentials — it turns an
+  already-established identity into a token, keeping the one class holding a
+  private key free of authentication branches.
+- **Signing keys are ephemeral and in-memory today.** ADR-010 requires Vault
+  KV v2 (loaded at startup, never on disk, deliberately not Vault Transit
+  since signing happens on every login). The provider interface is the seam
+  for that; the current implementation generates one RSA-2048 pair per
+  process, which is correct at ONE instance and wrong at two — each replica
+  would publish only its own key and reject the other's tokens. Gated behind
+  `auth.jwt.key-source=ephemeral`, WARNs at startup.
 - `AuthApplicationTest` — Testcontainers Postgres, ADR-008's integration
   tier. Asserts the schema Flyway produced and that CITEXT really makes
   email comparison case-insensitive.
@@ -70,7 +84,7 @@ silently altering tables. It also makes the otherwise-trivial
 migration and the entities disagree.
 
 **Verification status**: verified 2026-08-18.
-`./gradlew :backend:auth-service:test` is green — 14 tests, 0 failures —
+`./gradlew :backend:auth-service:test` is green — 19 tests, 0 failures —
 and `./gradlew build` across all 15 modules still passes. The artifact
 `build/libs/auth-service-0.1.0-SNAPSHOT.jar` is a 112 MB Spring Boot fat
 jar (application classes plus every dependency plus an embedded server),
@@ -113,8 +127,9 @@ service.
 
 ## Gap
 
-Everything except the above. Not implemented: login, JWT issuance, the
-JWKS endpoint, key rotation, the
+Everything except the above. Not implemented: login itself (token minting
+exists, credential verification does not), ADR-010's Vault-backed key
+source, ADR-012's four-phase key rotation, the
 `/refresh` endpoint with reuse detection, the `auth.revocation` producer,
 and Citus distribution by `user_id` (ADR-018 — deferred to a later
 migration since a single-node dev Postgres has nothing to distribute

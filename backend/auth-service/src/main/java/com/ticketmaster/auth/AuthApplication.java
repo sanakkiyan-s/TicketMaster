@@ -2,17 +2,21 @@ package com.ticketmaster.auth;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 /**
  * First service entry point in this repository (ADR-036 Phase 1).
  *
- * Scope of this slice is deliberately narrow: the application starts,
- * connects to Postgres, runs its Flyway baseline and answers
- * /actuator/health. JWT issuance, key rotation (ADR-012's four-phase
- * JWKS overlap) and the auth.revocation Kafka producer are separate
- * slices and are not implemented here.
+ * Implemented so far: registration, the generated OpenAPI surface, RS256
+ * access-token minting and the JWKS endpoint.
+ *
+ * Still absent, named so nobody assumes otherwise: login itself, the refresh
+ * endpoint with reuse detection, ADR-012's four-phase key rotation, ADR-010's
+ * Vault-backed key source (today's provider generates an ephemeral in-memory
+ * key), and the auth.revocation Kafka producer.
  */
 @SpringBootApplication
+@ConfigurationPropertiesScan
 public class AuthApplication {
 
     public static void main(String[] args) {

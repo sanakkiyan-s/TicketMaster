@@ -50,7 +50,7 @@ declare a healthcheck to report healthy, then runs the Vite dev server.
 | | |
 |---|---|
 | Frontend | http://localhost:5173 |
-| Postgres (coordinator) | localhost:5432 |
+| Postgres (coordinator) | localhost:**5433** — remapped, not the default 5432 |
 | PgBouncer | localhost:6432 |
 | Redis | localhost:**6380** — remapped, not the default 6379 |
 | Kafka | localhost:29092 |
@@ -58,10 +58,16 @@ declare a healthcheck to report healthy, then runs the Vite dev server.
 | Vault | localhost:8200, token `dev-root-token` |
 | MinIO API / console | localhost:9000 / localhost:9001 |
 
-**No backend service starts.** `backend/*` is build config only — zero
-Java/Kotlin sources exist yet. api-gateway is not on :8080, so every
-`/api/*` call the frontend makes fails at the Vite proxy. Expected in
-Phase 0.
+**`dev.sh` starts no backend service.** One now exists — auth-service, on
+:8081 — but it is started separately:
+
+```bash
+./gradlew :backend:auth-service:bootRun
+```
+
+Every other `backend/*` module is still build config only. api-gateway is
+not on :8080, so `/api/*` calls from the frontend fail at the Vite proxy
+even with auth-service up.
 
 Gradle modules still compile on their own:
 

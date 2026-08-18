@@ -11,7 +11,7 @@ spring:
     # production; going direct locally keeps a startup failure readable as
     # one hop instead of two while there is nothing to pool yet. Revisit
     # when connection-pool behaviour is actually being exercised.
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:ticketmaster}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:ticketmaster}
     username: ${DB_USER:ticketmaster}
     password: ${DB_PASSWORD:ticketmaster}
 
@@ -25,6 +25,26 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+
+auth:
+  jwt:
+    # `iss` and `aud` are matched by the gateway, so they are configuration
+    # rather than constants — the same build runs in every environment and must
+    # not claim to be the production issuer while running locally.
+    issuer: ${JWT_ISSUER:http://localhost:8081}
+    audience: ${JWT_AUDIENCE:ticketmaster-api}
+
+    # ADR-012's starting default, marked there as "needs real data". Also the
+    # floor for rotation phase 3 DRAIN: shortening it without adjusting the
+    # rotation schedule leaves live tokens signed by an already-destroyed key.
+    access-token-ttl: PT10M
+
+    # `ephemeral` generates an in-memory key pair at startup: correct at one
+    # instance, WRONG at two, since each replica would publish only its own key
+    # and reject the other's tokens. ADR-010 requires Vault KV v2 for anything
+    # shared; that provider does not exist yet, so production must not start
+    # until it does.
+    key-source: ${JWT_KEY_SOURCE:ephemeral}
 
 springdoc:
   api-docs:

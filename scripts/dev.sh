@@ -36,6 +36,15 @@ HEALTHCHECKED=(postgres-coordinator postgres-worker-1 redis minio)
 
 WAIT_TIMEOUT_SECONDS=180
 
+# Host port the coordinator is published on. NOT 5432: a native Postgres
+# install owns that on this machine, and because Postgres answers an
+# unknown role with the same "password authentication failed" it uses for a
+# wrong password, connecting to the squatter looked exactly like a bad
+# credential. Keep in sync with the "5433:5432" mapping in
+# docker-compose.yml and with DB_PORT's default in each service's
+# application.yml.
+HOST_PG_PORT=5433
+
 info() { printf '\033[0;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[0;33mwarn:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[0;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -110,10 +119,70 @@ wait_for_health() {
   done
 }
 
+# The container healthcheck proves the coordinator authenticates. It does
+# NOT prove that the published host port reaches THAT coordinator — a
+# native Postgres install or a container from another project can own the
+# port, and a service would then talk to the wrong database.
+#
+# Postgres reports "password authentication failed" for an unknown role as
+# well as for a wrong password (deliberately, to block user enumeration),
+# so the error alone cannot tell those apart. system_identifier can: it is
+# generated once by initdb and is unique per cluster. Same value on both
+# paths means the same server.
+verify_host_port_reaches_container() {
+  local in_container from_host
+
+  # PGPASSWORD is required even here: -h 127.0.0.1 is a TCP connection, so
+  # it authenticates for real rather than matching the image's
+  # `local all all trust` socket rule.
+  in_container="$(compose exec -T \
+    --env "PGPASSWORD=${POSTGRES_PASSWORD:-ticketmaster}" postgres-coordinator \
+    psql -h 127.0.0.1 -U "${POSTGRES_USER:-ticketmaster}" -d "${POSTGRES_DB:-ticketmaster}" \
+    -tAc 'SELECT system_identifier FROM pg_control_system()' 2>/dev/null | tr -d '[:space:]')"
+
+  if [[ -z "$in_container" ]]; then
+    # Reachable in practice only if the healthcheck passed but this query
+    # did not — e.g. the role exists with a different password than
+    # infra/.env claims, which happens when the volume was initialised by
+    # an earlier run (POSTGRES_PASSWORD is read ONLY by initdb, on an empty
+    # data directory, and is inert forever after).
+    warn "coordinator did not accept ${POSTGRES_USER:-ticketmaster}/<password from infra/.env>"
+    warn "the stored password likely predates infra/.env. wipe the volume:  ./scripts/dev.sh reset"
+    return 1
+  fi
+
+  # Run from a throwaway container rather than the host, so this needs no
+  # psql client installed on Windows. host.docker.internal is Docker
+  # Desktop's route back to the host's published ports.
+  from_host="$(docker run --rm \
+    --env "PGPASSWORD=${POSTGRES_PASSWORD:-ticketmaster}" \
+    citusdata/citus:12.1 \
+    psql -h host.docker.internal -p "$HOST_PG_PORT" -U "${POSTGRES_USER:-ticketmaster}" \
+      -d "${POSTGRES_DB:-ticketmaster}" \
+      -tAc 'SELECT system_identifier FROM pg_control_system()' 2>/dev/null | tr -d '[:space:]')"
+
+  if [[ -z "$from_host" ]]; then
+    warn "localhost:$HOST_PG_PORT did not accept ${POSTGRES_USER:-ticketmaster}, even though the container did."
+    warn "something else is listening on $HOST_PG_PORT, or its credentials differ."
+    warn "find it:  netstat -ano | grep :$HOST_PG_PORT"
+    return 1
+  fi
+
+  if [[ "$from_host" != "$in_container" ]]; then
+    warn "localhost:$HOST_PG_PORT reaches a DIFFERENT Postgres than the compose coordinator"
+    warn "  coordinator system_identifier : $in_container"
+    warn "  localhost:$HOST_PG_PORT       : $from_host"
+    warn "stop the other server (a native install, or another project's container) and retry"
+    return 1
+  fi
+
+  printf '    %-22s\033[0;32mreaches the coordinator\033[0m\n' "localhost:$HOST_PG_PORT"
+}
+
 print_endpoints() {
   cat <<'EOF'
 
-    Postgres (coordinator)  localhost:5432    ticketmaster/ticketmaster
+    Postgres (coordinator)  localhost:5433    ticketmaster/ticketmaster
     PgBouncer               localhost:6432    transaction pooling, ADR-024
     Redis                   localhost:6380    note: 6380, not the default 6379
     Kafka                   localhost:29092
@@ -125,9 +194,21 @@ print_endpoints() {
 EOF
 }
 
+# compose gets the env file via --env-file, but this script's own checks
+# need the same values. Sourced with `set -a` so every assignment is
+# exported to the docker invocations below.
+load_env() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+}
+
 start_infra() {
   require_tools
   seed_env "$ENV_FILE" "$ROOT/infra/.env.example"
+  load_env
 
   info "starting infra containers"
   compose up --detach --remove-orphans
@@ -135,6 +216,10 @@ start_infra() {
   info "waiting for health"
   if ! wait_for_health; then
     die "infra did not come up cleanly"
+  fi
+
+  if ! verify_host_port_reaches_container; then
+    die "the coordinator is healthy but localhost:$HOST_PG_PORT does not reach it"
   fi
 
   print_endpoints

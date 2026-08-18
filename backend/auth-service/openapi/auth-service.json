@@ -9,6 +9,9 @@
     "url" : "/"
   } ],
   "tags" : [ {
+    "name" : "jwks",
+    "description" : "Public signing keys for token verification"
+  }, {
     "name" : "auth",
     "description" : "Registration, login and token lifecycle"
   } ],
@@ -56,6 +59,27 @@
               "*/*" : {
                 "schema" : {
                   "$ref" : "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/jwks.json" : {
+      "get" : {
+        "tags" : [ "jwks" ],
+        "summary" : "JSON Web Key Set",
+        "description" : "Every key gateways should currently accept. Public material\nonly. Cached for 5 minutes; gateways must refresh\nproactively in the background and must NOT fetch on an\nunknown `kid` — a lazy fetch turns a flood of forged `kid`\nvalues into an amplified attack on auth-service (ADR-012).",
+        "operationId" : "jwks",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
                 }
               }
             }

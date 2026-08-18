@@ -58,6 +58,13 @@ public class SecurityConfig {
                         // or a healthy pod looks unhealthy to Kubernetes.
                         .requestMatchers("/actuator/health/**").permitAll()
 
+                        // JWKS is public BY DESIGN — it carries only public key
+                        // material, and every gateway must fetch it without a
+                        // credential (a token cannot be the credential for
+                        // fetching the keys that verify tokens). Unlike the
+                        // OpenAPI endpoints below, this one is safe at the edge.
+                        .requestMatchers(HttpMethod.GET, "/.well-known/jwks.json").permitAll()
+
                         // The generated spec and its viewer (ADR-034).
                         // Unauthenticated ON PURPOSE, but only safe
                         // because these are not public: api-gateway must
