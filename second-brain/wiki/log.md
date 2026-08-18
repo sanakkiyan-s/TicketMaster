@@ -654,3 +654,67 @@ notification design discussed earlier (KodeKloud FCM/pub-sub comparison).
   and `Manifests:` rows both marked NOT DECIDED; both Open Decisions lists
   extended.
 - `wiki/index.md` — gap added to Open Questions.
+
+## 2026-08-14 (cont. — auth-service skeleton, first code in the repo)
+
+### Added
+- `backend/auth-service/src/main/java/com/ticketmaster/auth/AuthApplication.java`
+  — `@SpringBootApplication`. First Java file in this repository
+  (ADR-036 Phase 1).
+- `backend/auth-service/src/main/resources/application.yml` — port 8081,
+  datasource via `DB_*` env vars with local-dev defaults, Flyway enabled,
+  `spring.jpa.hibernate.ddl-auto: validate`, actuator health with
+  ADR-032's liveness/readiness probes exposed. Points at Postgres
+  directly rather than PgBouncer (:6432) for now — ADR-024's pooling is
+  production shape, and going direct keeps a local startup failure one
+  hop instead of two while there is nothing to pool.
+- `backend/auth-service/src/main/resources/db/migration/V1__baseline.sql`
+  — `users` (CITEXT email so a case-duplicate account is
+  unrepresentable), `user_roles` (rows not a column, since ADR-030 needs
+  one user to hold USER + ORGANIZER), `refresh_tokens` (SHA-256
+  `token_hash` never the token itself, `family_id` for ADR-012's reuse
+  detection, `used_at` retained rather than deleted because a second
+  presentation IS the theft signal). Timestamps app-supplied, never
+  `DEFAULT now()`, per ADR-002's amendment.
+- `backend/auth-service/src/test/java/.../AuthApplicationTest.java` —
+  Testcontainers Postgres, ADR-008 integration tier. 3 tests, green.
+
+### Changed
+- `backend/auth-service/build.gradle.kts` — re-enables `bootJar` and
+  disables plain `jar` (both write to build/libs and collide on archive
+  name). First module to take the root build's documented opt-back-in.
+- Root `build.gradle.kts` — Testcontainers 1.20.1 -> 1.21.4, and
+  `systemProperty("api.version", "1.44")` added to `tasks.withType<Test>`.
+- `wiki/projects/auth-service.md` — rewritten: Current Implementation now
+  describes real code; both Open Questions removed.
+
+### Resolved Questions
+- `auth-service.md`'s two open questions (refresh-token storage DB vs
+  Redis; revocation strategy) deleted. **They were stale, not newly
+  resolved** — ADR-012 answered both on 2026-08-06 and `index.md` had
+  recorded them as resolved the whole time; only the project page was
+  never updated.
+
+### Notes
+- **Docker Engine 29.x breaks Testcontainers' default API negotiation.**
+  Engine answers `/info` with HTTP 400 and an all-empty stub body, and
+  Testcontainers reports it as "Could not find a valid Docker
+  environment" — which sends you hunting for a socket/pipe problem that
+  does not exist. The Docker CLI worked fine throughout. Diagnosed by
+  reading the raw 400 body out of the JUnit XML. Fix is the `api.version`
+  pin above; revisit when Testcontainers ships a client that negotiates
+  correctly against Engine 29+.
+- Testcontainers 2.0.5 was tried and rejected: at 2.x the DB modules and
+  JUnit 5 integration are not published under the existing coordinates
+  (`org.testcontainers:postgresql` and `:junit-jupiter` both stop at
+  1.21.4), and the consolidated `org.testcontainers:testcontainers:2.0.5`
+  jar contains no Postgres or JUnit classes.
+- Infra verified booting via `scripts/dev.sh infra` before this work —
+  the script's container path is no longer untested.
+
+### Opened Questions
+- ADR-018 shards auth-service by `user_id` under Citus. `V1__baseline.sql`
+  creates plain tables with no `create_distributed_table()` call, since a
+  single-node dev Postgres has nothing to distribute across. The
+  distribution migration is deferred and must not be forgotten before a
+  real multi-node cluster exists.

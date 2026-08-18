@@ -38,8 +38,8 @@ subprojects {
         "annotationProcessor"("org.projectlombok:lombok")
 
         "testImplementation"("org.springframework.boot:spring-boot-starter-test")
-        "testImplementation"("org.testcontainers:junit-jupiter:1.20.1")
-        "testImplementation"("org.testcontainers:postgresql:1.20.1")
+        "testImplementation"("org.testcontainers:junit-jupiter:1.21.4")
+        "testImplementation"("org.testcontainers:postgresql:1.21.4")
         "testImplementation"(platform("org.junit:junit-bom:5.11.0"))
 
         // gRPC internal service-to-service calls (ADR-023)
@@ -49,6 +49,14 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
+
+        // Docker Engine 29.x rejects the API version docker-java (via
+        // Testcontainers) negotiates by default, answering /info with
+        // HTTP 400 and a stub body. Every Testcontainers-backed test in
+        // every module hits this, so the pin belongs here, not per
+        // service. Remove once Testcontainers ships a client that
+        // negotiates correctly against Engine 29+.
+        systemProperty("api.version", "1.44")
     }
 
     // No module has a @SpringBootApplication main class yet (Phase 0 is

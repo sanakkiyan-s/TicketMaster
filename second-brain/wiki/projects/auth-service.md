@@ -2,9 +2,9 @@
 title: auth-service
 type: project
 sources: []
-related: [[system-overview]], [[user-service]], [[api-gateway]]
+related: [[system-overview]], [[user-service]], [[api-gateway]], [[ADR-012-jwt-lifecycle]], [[ADR-036-build-order-and-phasing]]
 created: 2026-08-05
-last-updated: 2026-08-05
+last-updated: 2026-08-14
 ---
 
 ## Purpose
@@ -15,7 +15,50 @@ gateway-side token validation) — highest-QPS service in the system.
 
 ## Current Implementation
 
-Not started. `backend/auth-service` is an empty directory.
+**First service in this repo to have real code** (started 2026-08-14,
+ADR-036 Phase 1). Verified against `backend/auth-service/src/`:
+
+- `com.ticketmaster.auth.AuthApplication` — `@SpringBootApplication`
+  entry point. The repo's first Java file.
+- `application.yml` — port 8081, datasource via `DB_*` env vars with
+  local-dev defaults, `spring.jpa.hibernate.ddl-auto: validate`,
+  Flyway enabled, actuator health with ADR-032's liveness/readiness
+  probes exposed.
+- `db/migration/V1__baseline.sql` — `users` (CITEXT email, unique),
+  `user_roles` (rows not a column, so one user can hold USER +
+  ORGANIZER per ADR-030), `refresh_tokens` (SHA-256 `token_hash` never
+  the token, `family_id` for ADR-012's reuse detection, `used_at`
+  retained rather than deleted since a second presentation is the theft
+  signal).
+- `AuthApplicationTest` — Testcontainers Postgres, ADR-008's integration
+  tier. Asserts the schema Flyway produced and that CITEXT really makes
+  email comparison case-insensitive.
+- `build.gradle.kts` — re-enables `bootJar` (and disables plain `jar` to
+  avoid an archive-name collision), the first module to do so. The root
+  build disables `bootJar` for all 15 modules because none had a main
+  class; this is the documented per-service opt-back-in.
+
+`ddl-auto: validate` is deliberate and load-bearing: Flyway owns the
+schema (ADR-027), and Hibernate must fail fast on drift rather than
+silently altering tables. It also makes the otherwise-trivial
+`contextLoads()` test meaningful — the context cannot start if the
+migration and the entities disagree.
+
+**Verification status**: verified 2026-08-14.
+`./gradlew :backend:auth-service:build` is green — 3 tests, 0 failures —
+and `./gradlew build` across all 15 modules still passes. The artifact
+`build/libs/auth-service-0.1.0-SNAPSHOT.jar` is a 112 MB Spring Boot fat
+jar (application classes plus every dependency plus an embedded server),
+which is what re-enabling `bootJar` produces.
+
+Two toolchain fixes were required to get there, both in the root build:
+Testcontainers bumped 1.20.1 -> 1.21.4, and `systemProperty("api.version",
+"1.44")` added to `tasks.withType<Test>`. Docker Engine 29.x answers
+docker-java's default negotiated API version with HTTP 400 and a stub
+`/info` body, which surfaces as the misleading "Could not find a valid
+Docker environment". The pin is in `subprojects` because every
+Testcontainers-backed test in every module will hit it, not just this
+service.
 
 ## Target Design
 
@@ -26,12 +69,28 @@ Not started. `backend/auth-service` is an empty directory.
   needs to stay fast and highly available; profile data is low-QPS CRUD
   with different scaling needs. See
   [[ADR-001-microservices-vs-modular-monolith]].
+- Token lifecycle, key rotation and revocation are fully specified in
+  [[ADR-012-jwt-lifecycle]]: RS256 access tokens (10 min), opaque
+  256-bit rotating refresh tokens (30 days, family-tracked, reuse
+  detection), four-phase zero-downtime JWKS key rotation, revocation via
+  a compacted `auth.revocation` Kafka topic pushed into gateway memory.
 
 ## Gap
 
-Everything.
+Everything except the skeleton above. Not implemented: registration,
+login, password hashing, JWT issuance, JWKS endpoint, key rotation, the
+`/refresh` endpoint with reuse detection, the `auth.revocation` producer,
+and Citus distribution by `user_id` (ADR-018 — deferred to a later
+migration since a single-node dev Postgres has nothing to distribute
+across).
 
 ## Open Questions
 
-- Refresh token storage: DB vs. Redis — not decided.
-- Token revocation strategy (blocklist vs. short-lived access + rotation) — not decided.
+None currently. (The two questions this page carried until 2026-08-14 —
+refresh-token storage DB vs Redis, and revocation strategy — were both
+resolved by [[ADR-012-jwt-lifecycle]] on 2026-08-06: Postgres for refresh
+tokens, since refresh happens roughly once per 10 minutes per active
+session and durability matters more than latency at that rate; revocation
+epochs via compacted Kafka topic. The page was simply never updated. Note
+for future sessions: `index.md` had recorded them as resolved the whole
+time.)
