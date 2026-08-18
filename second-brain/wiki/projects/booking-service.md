@@ -47,9 +47,6 @@ Everything.
 
 ## Open Questions
 
-- Idempotency key scheme for checkout requests — not decided.
-- Saga vs. simple sequential orchestration with compensating actions on
-  failure (e.g. release hold if payment fails) — not decided.
 - How often the payment-succeeded-but-hold-expired refund path actually
   triggers in practice — may need a grace-period extension of the hold
   once payment starts, per [[ADR-002-seat-locking-strategy]] Revisit When.

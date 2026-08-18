@@ -406,9 +406,9 @@
 
   var NODES = [
     // edge lane
-    {id:"client", group:"edge", x:110, y:80, w:170, h:60, title:"Client", sub:"React / TypeScript",
-      desc:"Browser and eventual native shell. Talks only to the CDN and, for API calls, the versioned REST edge — never to an internal service directly.",
-      adrs:[]},
+    {id:"client", group:"edge", x:110, y:80, w:170, h:60, title:"Client", sub:"React / TS / Vite",
+      desc:"Browser and eventual native shell. Talks only to the CDN and, for API calls, the versioned REST edge — never to an internal service directly. Stack decided 2026-08-14: Vite build, React Router (plain SPA — no SSR framework, the edge is already Nginx + Spring Cloud Gateway), Zustand for client state, TanStack Query for server state. Strict split — server responses are never mirrored into Zustand. Zustand stores are per-concern (auth, seat selection, queue, checkout) and subscribed via selectors; Context was rejected because SSE seat-status pushes would re-render the whole seat map. Styling is Tailwind + shadcn/ui (copied source over Radix primitives, not a dependency) — runtime CSS-in-JS was rejected because it would permanently require style-src 'unsafe-inline' against the PCI CSP. The seat map itself is excluded: hand-rolled SVG styled by [data-status], since SSE updates should flip an attribute rather than churn class strings.",
+      adrs:[["ADR-019","static bundle served via Cloudflare"],["ADR-022","SSE writes straight into the Zustand seat store"],["ADR-034","calls only /api/v1 at the gateway"]]},
     {id:"cdn", group:"edge", x:340, y:80, w:170, h:60, title:"Cloudflare", sub:"CDN / edge",
       desc:"Owns everything a request touches before it reaches a service: static assets, cache-tag purge, anycast routing, DDoS throttling.",
       adrs:[["ADR-016","event-homed anycast routing, geometry/occupancy CDN split"],["ADR-019","Cloudflare vs AWS split at the edge boundary"]]},
@@ -416,8 +416,8 @@
       desc:"Terminates TLS, load-balances to api-gateway instances, per-IP request-rate limiting — sits in front of, not instead of, the app-level gateway.",
       adrs:[["ADR-022","per-IP limit_conn for SSE admission"]]},
     {id:"gateway", group:"edge", x:800, y:70, w:230, h:80, title:"api-gateway", sub:"Spring Cloud Gateway",
-      desc:"Single entry point for all client traffic. Local JWT validation against cached JWKS, business-aware Redis rate limiting, gRPC fan-out to every internal service, REST edge versioning.",
-      adrs:[["ADR-009","two-token service/user JWT model"],["ADR-012","JWKS validation, revocation map"],["ADR-023","gRPC client to every internal service"],["ADR-032","stateless HA, min-3-AZ, liveness/readiness split"],["ADR-033","non-secret config via ConfigMap"],["ADR-034","/api/v1 versioning, generated OpenAPI"]]},
+      desc:"Single entry point for all client traffic. Local JWT validation against cached JWKS, business-aware Redis rate limiting, gRPC fan-out to every internal service, REST edge versioning. Route-config format decided 2026-08-14: YAML declares which routes exist and their numbers (path predicates, lb:// targets, rate-limit replenish/burst, timeouts) in the ConfigMap-mounted application.yml, so tuning needs no rebuild; Java filter beans own behaviour (JWT + revocation check, role-tiered rate-limit KeyResolver, correlation ID, ORGANIZER/ADMIN gate).",
+      adrs:[["ADR-009","two-token service/user JWT model"],["ADR-012","JWKS validation, revocation map"],["ADR-023","gRPC client to every internal service"],["ADR-032","stateless HA, min-3-AZ, liveness/readiness split"],["ADR-033","YAML routes live in the per-service ConfigMap"],["ADR-034","/api/v1 versioning, generated OpenAPI"]]},
     {id:"vault", group:"edge", x:1090, y:80, w:170, h:60, title:"Vault", sub:"secrets",
       desc:"AppRole bootstrap, dynamic Postgres credentials, Transit engine for GDPR key wrapping. Structurally separate from non-secret config.",
       adrs:[["ADR-010","secrets management"]]},
@@ -444,8 +444,8 @@
       desc:"Denormalized read model, fed by Kafka — the project's clearest CQRS example.",
       adrs:[["ADR-007","Kafka projection, read model"],["ADR-016","cross-region search replication"]]},
     {id:"media", group:"catalog", x:400, y:610, w:220, h:60, title:"media-service", sub:"video/trailers",
-      desc:"Pre-signed uploads, async FFmpeg transcoding via Kafka job topic. 15th service.",
-      adrs:[["ADR-017","object storage, transcoding"],["ADR-030","organizer ownership check on upload"]]},
+      desc:"Chunked, resumable, per-organizer-deduplicated uploads — S3 Multipart, 5-10MB parts, one presigned URL per part, never through the app tier; ETags verified against ListParts, not trusted from the client. Then async FFmpeg transcoding via Kafka job topic. 15th service.",
+      adrs:[["ADR-017","object storage, transcoding"],["ADR-017 am.","chunked/resumable upload, SHA-256 fingerprint resume, per-organizer dedup"],["ADR-030","organizer ownership check on upload"]]},
 
     // core
     {id:"inventory", group:"core", x:720, y:340, w:220, h:70, title:"inventory-service", sub:"seat state",
@@ -453,7 +453,7 @@
       adrs:[["ADR-002","hybrid Redis+Postgres seat lock"],["ADR-004","Redis Cluster autoscale"],["ADR-022","SSE connection admission"]]},
     {id:"booking", group:"core", x:720, y:430, w:220, h:70, title:"booking-service", sub:"orchestration",
       desc:"Hold → payment → confirm Saga. Compensation logic reused by both cancellation and dispute-loss paths.",
-      adrs:[["ADR-006","Saga orchestration"],["ADR-025","Idempotency-Key policy"],["ADR-028","reuses compensation for mass-refund"],["ADR-031","idempotent Kafka consumer"]]},
+      adrs:[["ADR-006","Saga orchestration"],["ADR-025","Idempotency-Key policy — UNIQUE(event_id, user_id, idempotency_key) + body hash; per-user scope since 2026-08-14"],["ADR-028","reuses compensation for mass-refund"],["ADR-031","idempotent Kafka consumer"]]},
     {id:"queue", group:"core", x:720, y:520, w:220, h:70, title:"queue-service", sub:"virtual waiting room",
       desc:"Per-show admission control for high-demand on-sales. Randomized draw, bound single-use tokens.",
       adrs:[["ADR-014","admission-token design"],["ADR-016","per-region authoritative queue"]]},

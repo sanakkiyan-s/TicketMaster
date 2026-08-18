@@ -216,7 +216,14 @@ into standalone flow pages.
   v4, mirrors Stripe's convention) + request-body hash colocated with
   the resource row; same-body replay returns current state,
   different-body reuse is rejected 422; closes the gap ADR-006's saga
-  quietly assumed away.
+  quietly assumed away. **Amended 2026-08-14**: uniqueness scoped per
+  user — `UNIQUE (event_id, user_id, idempotency_key)` — so one user's
+  key can never block another's booking and a key leaked through logs is
+  useless against anyone but its owner; legal under Citus because the
+  tuple still *contains* the distribution column. Depends on `user_id`
+  being NOT NULL (no guest checkout, confirmed 2026-08-14) — NULLs never
+  compare equal in a unique index, so introducing guest checkout without
+  revisiting this would silently disable idempotency for guest bookings.
 - [[ADR-024-pgbouncer-connection-pooling]] — PgBouncer, transaction
   pooling mode, one deployment per region in front of each Citus
   coordinator; closes the connection-pool-exhaustion failure mode
@@ -339,8 +346,26 @@ live list. Summary:
   [[ADR-017-media-service-video]]'s amendment.
 - ~~api-gateway technology choice~~ — resolved: Spring Cloud Gateway
   behind Nginx, see [[api-gateway]] / [[infra]].
+- ~~api-gateway route-config format (YAML vs Java DSL)~~ — resolved
+  2026-08-14: YAML declares routes and their numbers (ConfigMap-mounted
+  per [[ADR-033-non-secret-config-management]]), Java filter beans own
+  behaviour. See [[api-gateway]]'s "Route configuration format".
+- ~~Frontend state management / routing / build tool~~ — resolved
+  2026-08-14: Vite + React Router + Zustand (client state) + TanStack
+  Query (server state). Recorded in [[frontend]] and
+  [[implementation-roadmap]], not promoted to an ADR — none of it
+  constrains a backend guarantee, which is this vault's ADR bar.
 - ~~fraud-service fail-open vs fail-closed~~ — resolved: fail-open,
   logged, see [[fraud-service]].
+- **Deployment provisioning gap** — opened 2026-08-14. Twelve wiki pages
+  assume Kubernetes (ADR-032's replicas/HPA/probes, ADR-033's ConfigMaps,
+  ADR-009's NetworkPolicy, ADR-010's Vault AppRole, ADR-008's `kubectl
+  rollout undo`), but nothing states how a cluster gets created (IaC
+  tooling — Terraform et al.) or how manifests reach it (ArgoCD / Flux /
+  kubectl-from-CI / Helm). Only `infra/docker-compose.yml` exists today.
+  Deliberately deferred to Phase 5/6 rather than decided early — see
+  [[implementation-roadmap]]'s Open Decisions for the full note and the
+  risk if it is never closed.
 - Dynamic/surge pricing — deferred, see [[ADR-003-gap-list-triage]].
 - ~~Hold TTL base duration~~ — resolved: 5 min flat, see
   [[ADR-002-seat-locking-strategy]].

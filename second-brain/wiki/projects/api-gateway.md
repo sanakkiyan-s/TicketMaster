@@ -4,7 +4,7 @@ type: project
 sources: []
 related: [[system-overview]], [[auth-service]]
 created: 2026-08-05
-last-updated: 2026-08-05
+last-updated: 2026-08-14
 ---
 
 ## Purpose
@@ -14,7 +14,8 @@ services, validates auth tokens at the edge, applies rate limiting.
 
 ## Current Implementation
 
-Not started. `backend/api-gateway` is an empty directory.
+Not started. `backend/api-gateway` holds only `build.gradle.kts` — no
+`application.yml`, no filter beans, no routes (verified 2026-08-14).
 
 ## Target Design
 
@@ -22,6 +23,39 @@ Not started. `backend/api-gateway` is an empty directory.
 see [[infra]] for the two-layer split (Nginx edge vs api-gateway
 app-level). Fits Java-ecosystem learning goal; Nginx alone can't do
 JWT/business-rule-aware work below.
+
+### Route configuration format
+
+**Decided 2026-08-14: YAML for route definitions, Java for filter
+behaviour.** Not a preference between the two — a split by what is being
+expressed.
+
+- **YAML** (`application.yml`, mounted from the per-service k8s ConfigMap
+  per [[ADR-033-non-secret-config-management]]) owns the static routing
+  table: `spring.cloud.gateway.routes[]` — route id, `Path=` predicate,
+  `uri: lb://<service>`, which filters apply, and their numeric knobs
+  (rate-limit replenish/burst, timeouts, retry counts). These are exactly
+  the values ADR-033 exists to make changeable per environment without a
+  rebuild, and they differ between Compose-local and each region. A Java
+  DSL would compile the routing table into the artifact and force a
+  rebuild+redeploy to retune a burst capacity — the opposite of what
+  ADR-033 decided.
+- **Java** owns behaviour: custom `GatewayFilter`/`GlobalFilter` beans and
+  the `KeyResolver`. Anything with a conditional, a lookup, or a claim
+  read — JWKS-cached JWT validation ([[ADR-012-jwt-lifecycle]], including
+  the fail-closed Kafka revocation-map check), the role-tiered rate-limit
+  key `role:userId:endpoint` ([[ADR-030-organizer-admin-authorization]]),
+  correlation-ID injection ([[cross-cutting-concerns]]), and the
+  coarse ORGANIZER/ADMIN route gate. Expressing that logic as YAML
+  configuration would be encoding a program in a data format.
+
+Rule of thumb: **YAML declares which route exists and with what numbers;
+Java decides what happens to a request.** Route ordering stays explicit in
+YAML — no reliance on bean-registration order.
+
+Consequence: the ADR-034 CI diff of the generated OpenAPI spec and the
+git-tracked ConfigMap change together are the reviewable surface for any
+routing change; no route exists that is invisible in YAML.
 
 Responsibilities:
 

@@ -542,3 +542,115 @@ notification design discussed earlier (KodeKloud FCM/pub-sub comparison).
   volume — starting defaults.
 - Whether push-declined users also get SMS fallback — product choice,
   not yet decided.
+
+## 2026-08-14 (cont. — frontend stack + gateway route-config format)
+
+### Changed
+- `wiki/projects/frontend.md` — stack locked: Vite (build), React Router
+  (plain SPA router, no SSR framework), **Zustand** for client state,
+  TanStack Query for server state, with a strict no-mirroring rule
+  between the two. Store layout specified per concern (auth / seat
+  selection / queue / checkout) with selector-scoped subscriptions,
+  chosen for the SSE seat-status push load. `Current Implementation`
+  rewritten against actual code (`frontend/package.json`, `frontend/src/`)
+  — scaffold exists, only `main.tsx` + `lib/gateway.ts`.
+- `wiki/projects/api-gateway.md` — new "Route configuration format"
+  section: YAML owns the routing table and its numbers (ConfigMap-mounted
+  per ADR-033, retunable without a rebuild); Java filter beans own
+  behaviour (JWT + revocation, role-tiered rate-limit KeyResolver,
+  correlation ID, ORGANIZER/ADMIN gate). Java DSL rejected for route
+  definitions specifically because it would compile per-environment
+  numbers into the artifact, contradicting ADR-033.
+- `wiki/architecture/implementation-roadmap.md` — both Open Decisions
+  entries struck; stack table gained a frontend detail row and a gateway
+  route-config row; the earlier "global client-state library:
+  deliberately none" position is explicitly superseded by Zustand.
+- `wiki/architecture/blueprint.html` — `client` and `gateway` nodes
+  updated with both decisions.
+- `wiki/index.md` — both open questions struck.
+
+### Resolved Questions
+- Frontend state management / routing library / build tool.
+- api-gateway route-config format (YAML vs Java DSL).
+
+### Notes
+- Neither decision got an ADR, matching the bar the roadmap page already
+  set: an ADR is for choices that constrain a backend guarantee. Both are
+  replaceable without touching one.
+- Mismatch found and corrected: the roadmap's "Open Decisions (stack)"
+  list still called the frontend tooling undecided while the same page's
+  frontend section had already recorded Vite/React Router/TanStack Query.
+
+### Added
+- `frontend/package.json` — `zustand` ^5.0.15 installed.
+- Styling layer wired into the frontend scaffold: `tailwindcss` 4 via
+  `@tailwindcss/vite`, `src/index.css` (Tailwind import + shadcn
+  `:root`/`.dark` token layers + `@theme inline` mapping),
+  `components.json` (shadcn CLI config), `src/lib/utils.ts` (`cn()`),
+  `@` → `src` alias added to `vite.config.ts` to match the one already
+  in `tsconfig.json`, and the first two generated components
+  (`src/components/ui/button.tsx`, `dialog.tsx`).
+  `npm run typecheck` + `npm run build` pass; build emits
+  `dist/assets/index-*.css` at 21.3 kB (4.6 kB gzipped) — a static
+  stylesheet, i.e. the CSP argument holding in practice.
+
+### Decisions
+- **Frontend CSS / component library: Tailwind CSS + shadcn/ui.**
+  shadcn components are copied source in `src/components/ui/`, not a
+  dependency; real deps are Tailwind + `@radix-ui/*`. Decided on two
+  system constraints, not preference: (1) runtime CSS-in-JS
+  (styled-components / Emotion / MUI) permanently requires `style-src
+  'unsafe-inline'` against the CSP `frontend/index.html` already carries
+  for ADR-011's SAQ A scope — Tailwind compiles to a static stylesheet
+  and leaves that directive droppable; (2) ADR-016's multi-MB layout SVG
+  has already spent the seat page's byte budget, so a ~90KB
+  batteries-included library buying overridable visual defaults is a bad
+  trade. Radix carried specifically for dialog focus-trap/`aria-modal`
+  correctness on checkout and queue modals.
+- **Seat map explicitly excluded** from the component/utility-class
+  system: hand-rolled `<svg>` over ADR-016's versioned geometry asset,
+  styled by a plain `seatmap.css` keyed on `[data-status]`. SSE seat
+  updates flip one attribute instead of churning utility class strings
+  across thousands of nodes.
+
+### Resolved Questions
+- Frontend CSS approach / design system / component library.
+
+### Opened Questions
+- Whether `style-src 'unsafe-inline'` can actually be dropped once
+  Tailwind lands — Stripe's iframe embed may still require it. Verify
+  against Stripe's documented CSP requirements before tightening.
+
+## 2026-08-14 (cont. — deployment provisioning gap opened)
+
+### Opened Questions
+- **IaC tooling not decided** (Terraform vs Pulumi vs CloudFormation vs
+  none). Twelve wiki pages assume Kubernetes — ADR-032 (min-3 replicas
+  across AZs, HPA on CPU+request-rate, liveness/readiness split), ADR-033
+  (per-service ConfigMap mounted as `application.yml`), ADR-009
+  (NetworkPolicy floor, mTLS "deferred to k8s"), ADR-010 (Vault AppRole),
+  ADR-008's amendment (`kubectl rollout undo`) — and ADR-016/018 add
+  per-region clusters. No decision anywhere covers how a cluster or its
+  managed services get provisioned. Searched the vault: zero mentions of
+  terraform, pulumi, cloudformation, argocd, flux, gitops, or helm.
+- **k8s manifest delivery not decided** (ArgoCD / Flux / kubectl-from-CI /
+  Helm). Same root gap. ADR-008's rolling update and SLI-triggered
+  automatic rollback both presuppose something applies manifests; that
+  something is unnamed.
+
+### Notes
+- Deliberately NOT resolved with an ADR now. Deciding tooling for
+  infrastructure that does not exist, six phases before it is needed, is
+  how ADRs go stale before first use. Both are flagged for Phase 5/6.
+- Only infrastructure that exists today: `infra/docker-compose.yml`
+  (local dev) plus `scripts/dev.sh`. No k8s manifests, no cluster, no IaC.
+- Risk recorded on the roadmap: several ADRs describe k8s-dependent
+  behaviour (fail-open readiness, cross-AZ spread, HPA on request rate)
+  that would never be exercised if the project only ever runs on Compose —
+  documented but unproven.
+
+### Changed
+- `wiki/architecture/implementation-roadmap.md` — section 9 gained `IaC:`
+  and `Manifests:` rows both marked NOT DECIDED; both Open Decisions lists
+  extended.
+- `wiki/index.md` — gap added to Open Questions.

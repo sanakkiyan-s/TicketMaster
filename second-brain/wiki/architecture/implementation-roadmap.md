@@ -59,19 +59,42 @@ functioning product.
 | Testing | JUnit 5, Spring Cloud Contract (REST edge), `buf breaking` (gRPC), k6 (load), Chaos Mesh + Toxiproxy (fault injection), PIT (mutation, inventory/booking only) | ADR-008 |
 | CI | Tiered pipeline (per-commit / per-merge / nightly / weekly) | ADR-008 |
 | CD | Rolling update (k8s), automatic rollback on ADR-015 SLI signals | ADR-008 amendment |
-| Frontend | React + TypeScript | `CLAUDE.md`, `frontend.md` |
+| Frontend | React + TypeScript, Vite (build), React Router (routing), Zustand (client state), TanStack Query (server state) | `CLAUDE.md`, `frontend.md` |
+| API Gateway route config | YAML route definitions (ConfigMap-mounted, ADR-033) + Java filter beans for behaviour | `api-gateway.md` |
 
 ## Open Decisions (stack)
 
 - **CI runner/platform** (GitHub Actions vs GitLab CI vs Jenkins) —
   never named anywhere in the vault; only the pipeline *shape* (tiers,
   timing) is decided (ADR-008).
-- **Frontend state management, routing library, build tool** — only the
-  language/framework (React + TypeScript) is decided; Redux vs Zustand
-  vs Context, React Router vs other, Vite vs other — not decided.
-- **API Gateway internal implementation detail**: Spring Cloud Gateway is
-  decided (`api-gateway.md`), but exact route-config format
-  (YAML vs Java DSL) is not.
+- **Infrastructure-as-Code tooling** (Terraform vs Pulumi vs
+  CloudFormation vs none) — opened 2026-08-14. Twelve wiki pages assume
+  Kubernetes (ADR-032's replicas/HPA/probes, ADR-033's ConfigMaps,
+  ADR-009's NetworkPolicy, ADR-008's `kubectl rollout undo`,
+  ADR-010's Vault AppRole), and ADR-016/018 add multi-region clusters —
+  but **no decision anywhere covers how a cluster or its managed services
+  get created**. The only infrastructure that exists today is
+  `infra/docker-compose.yml` for local dev. Needed by Phase 5/6; harmless
+  before then. Flagged now because the gap was invisible: the ADRs read as
+  though a deployment target already exists.
+- **Kubernetes manifest delivery** (ArgoCD vs Flux vs kubectl-from-CI vs
+  Helm) — opened 2026-08-14, same root gap as above. ADR-008's rolling
+  update and automatic SLI-triggered rollback both presuppose *something*
+  applies manifests to a cluster; that something is unnamed. GitOps
+  tooling is optional for a solo project — `kubectl apply` from CI is
+  defensible — so this should not be decided by default.
+
+  **Risk if never closed**: several ADRs describe k8s-dependent behaviour
+  (fail-open readiness probes, cross-AZ replica spread, HPA on request
+  rate) that would never be exercised on Compose. Those decisions would be
+  documented but unproven.
+- ~~Frontend state management, routing library, build tool~~ — resolved
+  2026-08-14: **Vite** (build), **React Router** (routing), **Zustand**
+  (client state), **TanStack Query** (server state). See the frontend
+  section below and `frontend.md`.
+- ~~API Gateway route-config format (YAML vs Java DSL)~~ — resolved
+  2026-08-14: **YAML for route definitions, Java for filter behaviour**.
+  See `api-gateway.md`.
 
 # 3. Implementation Order
 
@@ -151,7 +174,7 @@ section is an index, not a re-derivation.
 | `session_notify_me` | event-service | `event_id` | ADR-021 |
 | `outbox` (per service) | every producer | matches owner table | ADR-007 |
 | `processed_events` | every consumer | N/A (dedup table) | ADR-031 |
-| `bookings` | booking-service | `event_id` | ADR-006, `PRIMARY KEY(event_id, booking_id)`, `UNIQUE(event_id, idempotency_key)` |
+| `bookings` | booking-service | `event_id` | ADR-006, `PRIMARY KEY(event_id, booking_id)`, `UNIQUE(event_id, user_id, idempotency_key)` (ADR-025 amendment 2026-08-14 — per-user scope; requires `user_id` NOT NULL, valid because there is no guest checkout) |
 | `payment_events`, `payment_intents` | payment-service | `event_id` | ADR-020 |
 | `saved_payment_method` | payment-service | N/A | ADR-011 |
 | `user_payment_method_ref` | user-service | N/A | ADR-011 |
@@ -213,9 +236,54 @@ accordingly.
 
 ## Open Decisions (frontend)
 
-- State management library, routing library, build tool, CSS approach —
-  none decided anywhere in the vault.
-- Design system / component library — not decided.
+**Correction (2026-08-14)**: an earlier draft of this page listed the
+build tool as undecided. That was wrong — `frontend.md` line 21 already
+specifies **Vite**, alongside React and TypeScript. Only the data layer
+was ever open, and `frontend.md`'s own open question scoped it as "to be
+picked once API contracts exist," which ADR-034 has now satisfied.
+
+- **Data-fetching / server state**: the Phase-1 scaffold uses
+  **TanStack Query**, and **React Router** for routing. Chosen at
+  implementation time, recorded here rather than promoted to an ADR —
+  both are replaceable without touching a backend guarantee, which is
+  the bar this vault uses for what deserves an ADR.
+- **Global client-state library**: **Zustand**, decided 2026-08-14
+  (supersedes this page's earlier "deliberately none" position). Scope is
+  *client* state only — TanStack Query stays the owner of server state,
+  and server responses are not mirrored into Zustand. Small stores by
+  concern, not one god store:
+  - `authStore` — session/token state (ADR-012)
+  - `seatSelectionStore` — in-progress seat picks + live seat status
+    arriving over SSE (ADR-022, `seat-availability-live-updates`)
+  - `queueStore` — admission token + queue position (ADR-014)
+  - `checkoutStore` — saga step + the in-flight booking's
+    `Idempotency-Key` (ADR-025)
+
+  Chosen over Redux (boilerplate outsized for this state volume) and
+  Context (every consumer re-renders on any change — bad fit for the
+  high-frequency SSE seat-status push, which is the only unusual state
+  load in this frontend). Zustand's selector-scoped subscriptions bound
+  re-renders to the seats that actually changed, and its store is
+  writable from outside React, which is what an `EventSource.onmessage`
+  handler needs — no context plumbing of the SSE connection.
+
+  Rule for components: subscribe with a selector
+  (`useSeatStore(s => s.seats[id])`), never the whole store.
+
+  Recorded here, not as an ADR — same bar as the routing/data-layer
+  choices above: replaceable without touching a backend guarantee.
+- **CSS approach / component library**: **Tailwind CSS + shadcn/ui**,
+  decided 2026-08-14. shadcn components are copied source under
+  `src/components/ui/`, not an npm dependency; real deps are Tailwind and
+  the `@radix-ui/*` primitives. Decided on two system constraints rather
+  than preference: runtime CSS-in-JS (styled-components/Emotion/MUI)
+  would permanently require `style-src 'unsafe-inline'` against the CSP
+  `frontend/index.html` carries for ADR-011's SAQ A scope, and ADR-016's
+  multi-MB layout SVG has already spent the page's byte budget. Radix is
+  carried for dialog/menu a11y correctness. The seat map is explicitly
+  outside this: hand-rolled `<svg>` + a plain CSS file keyed on
+  `[data-status]`, since SSE-driven seat updates should flip an attribute,
+  not churn utility class strings. See `frontend.md`.
 
 # 9. Infrastructure & DevOps
 
@@ -229,6 +297,13 @@ CI:             tiered pipeline per ADR-008 (runner platform: Open
                 Decision)
 CD:             rolling k8s update, automatic rollback on ADR-015 SLIs
                 (ADR-008 amendment)
+IaC:            NOT DECIDED — Open Decision. Nothing in the vault says how
+                the cluster or managed services get provisioned. Terraform
+                is the obvious candidate; never discussed.
+Manifests:      NOT DECIDED — Open Decision. ADR-033 assumes ConfigMaps
+                exist and ADR-032 assumes Deployments with HPA, but no
+                decision covers how either reaches a cluster (ArgoCD /
+                Flux / kubectl-from-CI / Helm).
 Staging:        not explicitly decided — Open Decision (whether staging
                 mirrors prod's AWS target or runs on Compose)
 Production:     AWS EC2 (self-managed Postgres/Citus, not RDS),
@@ -385,7 +460,17 @@ yet.
 ## Open Decisions (summary, collected)
 
 - CI runner/platform not named.
-- Frontend state management, routing, build tool, component library not decided.
-- Build tool (Gradle vs Maven) not decided.
+- IaC tooling not named (Terraform vs alternatives) — needed Phase 5/6.
+  Every k8s assumption in the vault currently has no provisioning story.
+- k8s manifest delivery not named (ArgoCD / Flux / kubectl-from-CI /
+  Helm) — needed Phase 5/6.
+- ~~Frontend CSS approach / component library~~ — resolved 2026-08-14:
+  Tailwind CSS + shadcn/ui, see the frontend section above. (Build tool
+  was never open — `frontend.md` specifies Vite; data layer resolved in
+  the Phase-1 scaffold.)
+- Backend build tool: **Gradle**, chosen 2026-08-14 — 15 modules with
+  per-service protobuf codegen (ADR-023) make incremental build and
+  build-cache behaviour matter against ADR-008's <10min per-commit CI
+  tier. Recorded here, not as an ADR: it constrains no runtime guarantee.
 - Seed/fixture data strategy not decided.
 - Staging environment shape not decided.

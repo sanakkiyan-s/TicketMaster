@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      PCI-DSS SAQ A boundary (ADR-011). Card fields render inside a
+      Stripe-origin iframe; this app's own JS must never be able to read
+      them. The allowlist below is the enforcement, and PCI-DSS v4.0
+      6.4.3 / 11.6.1 make script inventory + integrity checking a
+      requirement even at SAQ A.
+
+      This meta tag is the DEV baseline. In production the same policy
+      MUST also be sent as a real CSP response header at the edge
+      (Cloudflare / Nginx, ADR-019) — a meta-tag CSP cannot express
+      frame-ancestors and cannot be report-only, so it is a floor, not
+      the whole control.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        script-src 'self' https://js.stripe.com;
+        frame-src https://js.stripe.com https://hooks.stripe.com;
+        connect-src 'self' https://api.stripe.com;
+        img-src 'self' data: https:;
+        style-src 'self' 'unsafe-inline';
+        style-src-elem 'self';
+        style-src-attr 'unsafe-inline';
+        base-uri 'self';
+        form-action 'self';
+        object-src 'none'
+      "
+    />
+
+    <title>TicketMaster</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

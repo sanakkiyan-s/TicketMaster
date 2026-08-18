@@ -145,6 +145,59 @@ as a frontend contract, not assumed.
   client-side (none identified currently) — would justify Option C for
   that specific flow only, not a wholesale switch.
 
+## Amendment: constraint scoped per user (2026-08-14)
+
+**Gap found**: the constraint above is `UNIQUE (event_id, idempotency_key)`
+— the key namespace is shared across every user of an event. Two
+different users who generate the same UUID for the same event collide:
+the second user's `INSERT` is rejected by a row that is not theirs, and
+they fall to case 3 (differing body hash) and get a 422 for a request
+that was entirely valid.
+
+The collision itself is not the real argument — UUID v4 is 122 random
+bits, and scoped per event the probability is around 10^-25. Two other
+reasons carry it:
+
+- **The constraint should mean what the key means.** An idempotency key
+  identifies one user's one intent. The user is part of what makes that
+  intent unique, so the user belongs in the tuple.
+- **Keys travel in a header, and headers land in logs.** Access logs,
+  proxy logs, APM traces, error reports. A key is unguessable but it is
+  not a secret. Anyone who reads one out of a log could pre-insert it and
+  block that specific booking. Scoped per user, a leaked key is useless
+  against anyone but its owner.
+
+```sql
+-- before: UNIQUE (event_id, idempotency_key)
+-- after:
+UNIQUE (event_id, user_id, idempotency_key)
+```
+
+Legal under Citus: a unique constraint on a distributed table must
+*contain* the distribution column, not consist solely of it. `event_id`
+is still present, so this stays a single-shard check — the colocation
+property the original decision was built around is unchanged.
+
+Retry detection is unaffected: the same user retrying the same attempt
+still produces an identical tuple and is still rejected by the
+constraint. Only *other users* stop being caught.
+
+**Depends on a NOT NULL purchaser.** `NULL` never compares equal in a
+unique index, so any row with `user_id IS NULL` would silently bypass the
+constraint entirely — idempotency would appear configured and be
+completely inert for those rows. Confirmed 2026-08-14 that this system
+has **no guest checkout**: booking requires an authenticated user, so
+`user_id` is NOT NULL on every `bookings` row and the constraint always
+engages. If guest checkout is ever introduced, this amendment must be
+revisited first — the column would need to become a non-null
+purchaser/session identifier rather than a nullable `user_id`, and
+shipping guest checkout without that change would silently disable
+idempotency for every guest booking.
+
+Same widening applies to every other state-changing endpoint adopting
+this policy: key + body hash colocated with the mutated row, uniqueness
+scoped by (distribution column, actor, key).
+
 ## Open Questions
 
 - Endpoints whose action has no natural long-lived row to attach the key

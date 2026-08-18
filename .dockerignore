@@ -1,0 +1,28 @@
+# Build output
+build/
+.gradle/
+target/
+
+# VCS / IDE
+.git/
+.idea/
+*.iml
+.vscode/
+
+# Secrets / env
+.env
+*.env.local
+infra/vault/data/
+
+# Docs (never needed inside an image)
+second-brain/
+README.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend
+node_modules/
+dist/
+.next/
