@@ -2,9 +2,9 @@
 title: api-gateway
 type: project
 sources: []
-related: [[system-overview]], [[auth-service]]
+related: [[system-overview]], [[auth-service]], [[ADR-039-dual-tier-login-rate-limiting]]
 created: 2026-08-05
-last-updated: 2026-08-14
+last-updated: 2026-08-19
 ---
 
 ## Purpose
@@ -63,15 +63,14 @@ Responsibilities:
 - JWT validation done **locally** — signature check against a cached JWKS
   public key, not a network call to auth-service per request. auth-service
   still owns issuance/refresh; the gateway only verifies.
-- **Business-aware rate limiting** — Spring Cloud Gateway's
-  `RequestRateLimiter`, Redis-backed, keyed by `userId:endpoint` (not IP).
-  Runs a Lua script in Redis (token-bucket: read remaining tokens,
-  decrement, write, all as one atomic op) — same reason
-  [[ADR-002-seat-locking-strategy]]'s seat-lock uses an atomic Redis op
-  instead of separate GET-then-SET: without atomicity, two concurrent
-  requests can both read the same token count before either writes,
-  letting more through than the limit allows. `RequestRateLimiter` ships
-  this Lua script built in — not hand-rolled.
+- **Business-aware rate limiting for authenticated routes** — Spring
+  Cloud Gateway's `RequestRateLimiter`, Redis-backed, keyed by
+  `userId:endpoint` (not IP). `RequestRateLimiter` ships its own atomic
+  Redis Lua script for the token-bucket read-decrement-write — not
+  hand-rolled — same reason [[ADR-002-seat-locking-strategy]]'s seat-lock
+  uses an atomic Redis op instead of separate GET-then-SET: without
+  atomicity, two concurrent requests can both read the same token count
+  before either writes, letting more through than the limit allows.
   Example limits: `user-42:POST /api/bookings` -> 5/min (expensive,
   abuse-prone), `user-42:GET /api/events` -> 100/min (cheap, browsing).
   Contrast with Nginx's `limit_req_zone`, which only keys off IP — can't
@@ -90,6 +89,20 @@ Responsibilities:
   instead of one bucket assumed to fit every caller. Anonymous/`USER`
   buckets stay the tightest tier — unauthenticated and regular-buyer
   traffic is exactly the abuse surface this limiter exists for.
+
+  **`/api/v1/auth/login` and `/api/v1/auth/register` are the one gap this
+  scheme has no answer for** — there is no `userId` yet at the point
+  credentials are being exchanged. [[ADR-039-dual-tier-login-rate-limiting]]
+  resolves it with a second, independent layer: the gateway runs a loose,
+  IP-keyed `RequestRateLimiter` on these two routes specifically
+  (`RateLimitConfig.ipKeyResolver`, `auth-service-login`/
+  `auth-service-register` routes in `application.yml` — 60/min and 20/min),
+  purely as a volumetric shield against floods, since the gateway cannot
+  safely buffer the request body to key by username without breaking its
+  streaming WebFlux/Netty design. The tight, per-account defense (5 failed
+  attempts/min by username, then a DB-backed 15-minute lockout after 10)
+  lives entirely in auth-service's `LoginAttemptLimiter`, where the body
+  has already been parsed — see [[auth-service]].
 - Correlation ID injection (per [[cross-cutting-concerns]]).
 - Circuit breakers (Resilience4j) around downstream service calls.
 - CORS handling.

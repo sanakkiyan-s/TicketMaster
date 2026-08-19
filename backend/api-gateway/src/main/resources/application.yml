@@ -21,6 +21,60 @@ spring:
         # wiki/projects/api-gateway.md): it ships as a ConfigMap per ADR-033
         # and can be retuned without a rebuild. Java owns filter BEHAVIOUR;
         # YAML owns which path goes where.
+        #
+        # login and register get their own routes, ahead of the general
+        # auth-service catch-all below, purely so each can carry its own
+        # RequestRateLimiter args - routes are matched in list order, first
+        # match wins, so the more specific ones must come first.
+        #
+        # This limiter is IP-keyed (ipKeyResolver, RateLimitConfig) and
+        # stays that way deliberately - it is the volumetric shield, not
+        # the account-abuse control. It cannot see the request body
+        # (Spring Cloud Gateway is a streaming WebFlux/Netty proxy;
+        # buffering the body here to read a username would defeat the
+        # whole point of a non-blocking gateway and open a
+        # memory-exhaustion DoS surface). The tight, per-account defense
+        # (5 failed attempts/min by username, then a DB-backed lockout
+        # after 10) lives in auth-service's LoginService, where the body
+        # has already been safely parsed - see that service's
+        # application.yml (auth.login-security) and
+        # wiki/projects/api-gateway.md.
+        #
+        # replenishRate/burstCapacity are per-second integers - Spring
+        # Cloud Gateway's own constraint, not this project's choice. 60/min
+        # only fits it cleanly because 60 is divisible by 60
+        # (replenishRate: 1); a limit that wasn't a clean multiple of 60
+        # couldn't be expressed exactly here and would need the same
+        # custom-Lua approach this replaced.
+        - id: auth-service-login
+          uri: ${AUTH_SERVICE_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/login
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.burstCapacity: 60
+                redis-rate-limiter.requestedTokens: 1
+                key-resolver: "#{@ipKeyResolver}"
+        # Register: same volumetric-only reasoning, no per-account layer
+        # needed since there is no existing account to brute-force yet.
+        # 20/min doesn't reduce to a whole replenishRate on its own
+        # (20/60 = 0.333), so requestedTokens does the rest: each request
+        # spends 3 tokens against a 1-token/sec refill, netting exactly
+        # 1/3 request per second = 20/min. burstCapacity 60 = 20 requests'
+        # worth of tokens, so an idle bucket still allows a burst of 20.
+        - id: auth-service-register
+          uri: ${AUTH_SERVICE_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/register
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.burstCapacity: 60
+                redis-rate-limiter.requestedTokens: 3
+                key-resolver: "#{@ipKeyResolver}"
         - id: auth-service
           uri: ${AUTH_SERVICE_URI:http://localhost:8081}
           predicates:
@@ -34,27 +88,6 @@ spring:
         response-timeout: 10s
 
 gateway:
-  rate-limit:
-    enabled: true
-    rules:
-      # Login: bounds credential-stuffing throughput per IP. 10/min is a
-      # starting default, not measured against real traffic - generous
-      # enough that a typo-prone legitimate user or a shared corporate/NAT IP
-      # is unlikely to trip it, while still keeping brute-force guessing far
-      # below anything that threatens a 12-char password (RegisterRequest's
-      # own minimum). Combined with BCrypt(12)'s ~250ms cost and the
-      # byte-identical 401 for unknown-email vs wrong-password, this is
-      # defense in depth, not the only control.
-      - path-prefix: /api/v1/auth/login
-        limit: 10
-        window: PT1M
-      # Register: looser abuse profile (bulk signup, not password guessing),
-      # so a slightly tighter limit is fine - one legitimate signup rarely
-      # needs more than a couple of retries.
-      - path-prefix: /api/v1/auth/register
-        limit: 5
-        window: PT1M
-
   jwt:
     jwks-uri: ${JWKS_URI:http://localhost:8081/.well-known/jwks.json}
     issuer: ${JWT_ISSUER:http://localhost:8081}

@@ -1,6 +1,12 @@
 // auth-service (ADR-012): JWT issuance, key rotation, revocation.
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-security")
+    // LoginAttemptLimiter: per-username failed-login counter. The
+    // gateway's IP-keyed leaky bucket is the volumetric shield; this is
+    // the account-abuse control, and it needs the parsed request body
+    // (the username), which only exists once Spring MVC has deserialized
+    // it here - the gateway is a streaming proxy that never buffers it.
+    implementation("org.springframework.boot:spring-boot-starter-data-redis")
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")

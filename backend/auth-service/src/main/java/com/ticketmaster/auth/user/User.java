@@ -3,6 +3,7 @@ package com.ticketmaster.auth.user;
 import jakarta.persistence.*;
 import lombok.Getter;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
@@ -52,6 +53,19 @@ public class User {
     @Column(name = "role", nullable = false)
     private Set<String> roles = new HashSet<>();
 
+    /**
+     * Slow-attacker backstop behind LoginAttemptLimiter's Redis window
+     * (auth-service). Redis forgets every failure once its window
+     * expires; this persists across arbitrarily many windows, so an
+     * attacker pacing guesses just under 5/min forever still eventually
+     * locks the account out.
+     */
+    @Column(name = "failed_login_attempts", nullable = false)
+    private int failedLoginAttempts = 0;
+
+    @Column(name = "locked_until")
+    private Instant lockedUntil;
+
     protected User() {
         // JPA
     }
@@ -70,5 +84,32 @@ public class User {
      */
     public Set<String> getRoles() {
         return Set.copyOf(roles);
+    }
+
+    public boolean isLocked(Instant now) {
+        return lockedUntil != null && lockedUntil.isAfter(now);
+    }
+
+    /**
+     * Called on every wrong-password attempt against a known user.
+     * Locking at exactly {@code lockThreshold} failures, not after, means
+     * the (threshold)th attempt is the one that trips the lock rather than
+     * requiring one more beyond it.
+     */
+    public void recordFailedLogin(Instant now, int lockThreshold, Duration lockDuration) {
+        this.failedLoginAttempts++;
+        this.updatedAt = now;
+        if (this.failedLoginAttempts >= lockThreshold) {
+            this.lockedUntil = now.plus(lockDuration);
+        }
+    }
+
+    /** Called on every successful login - a real password clears the slate. */
+    public void resetFailedLogins(Instant now) {
+        if (this.failedLoginAttempts != 0 || this.lockedUntil != null) {
+            this.failedLoginAttempts = 0;
+            this.lockedUntil = null;
+            this.updatedAt = now;
+        }
     }
 }

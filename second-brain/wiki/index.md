@@ -168,6 +168,21 @@ into standalone flow pages.
   than blocks, matching that ADR's own wording, unlike ADR-023's
   `buf breaking`, which blocks. No deploy step: deployment is still blocked
   on the IaC and manifest-delivery Open Decisions.
+- [[ADR-039-dual-tier-login-rate-limiting]] - closes the gap the original
+  `userId:endpoint` gateway rate-limit scheme left at login/register
+  (no `userId` exists pre-auth). Two independent layers: a loose,
+  IP-keyed `RequestRateLimiter` at the gateway (60/min login, 20/min
+  register - Spring Cloud Gateway's built-in limiter, not hand-rolled,
+  now that 60/min lands on a clean per-second integer) purely as a
+  volumetric shield, since the gateway cannot safely buffer the request
+  body to key by username; a tight, username-keyed `LoginAttemptLimiter`
+  (Redis, atomic Lua) in auth-service backed by a DB-persisted
+  10-failure/15-minute lockout on `User`, since that is where the parsed
+  credential actually exists. Resilience4j rejected (no distributed
+  backend, breaks under ADR-032's multi-replica gateway); Bucket4j's Redis
+  module rejected on cost - the counter was never the hard part, the
+  enumeration-safe response shape and DB lockout still need hand-written
+  code regardless of which library sits underneath.
 - [[ADR-036-build-order-and-phasing]] — closes the vault's oldest open
   question. Six dependency-ordered phases (bootstrap → identity/edge →
   catalog → transaction core → support consumers → secondary features →

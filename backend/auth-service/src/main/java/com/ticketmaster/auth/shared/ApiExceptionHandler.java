@@ -1,6 +1,7 @@
 package com.ticketmaster.auth.shared;
 
 import com.ticketmaster.auth.login.InvalidCredentialsException;
+import com.ticketmaster.auth.login.TooManyLoginAttemptsException;
 import com.ticketmaster.auth.registration.EmailAlreadyRegisteredException;
 import com.ticketmaster.auth.token.InvalidRefreshTokenException;
 import org.springframework.http.HttpStatus;
@@ -59,6 +60,19 @@ public class ApiExceptionHandler {
     public ProblemDetail handleInvalidCredentials(InvalidCredentialsException e) {
         ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
         problem.setTitle("Invalid credentials");
+        return problem;
+    }
+
+    /**
+     * 429, safe to distinguish from the 401 above - see
+     * TooManyLoginAttemptsException's own javadoc for why this one
+     * doesn't reopen the enumeration hole InvalidCredentialsException's
+     * identical-401 handling exists to close.
+     */
+    @ExceptionHandler(TooManyLoginAttemptsException.class)
+    public ProblemDetail handleTooManyLoginAttempts(TooManyLoginAttemptsException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.TOO_MANY_REQUESTS);
+        problem.setTitle("Too many login attempts");
         return problem;
     }
 

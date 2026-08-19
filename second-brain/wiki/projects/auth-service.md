@@ -2,9 +2,9 @@
 title: auth-service
 type: project
 sources: []
-related: [[system-overview]], [[user-service]], [[api-gateway]], [[ADR-012-jwt-lifecycle]], [[ADR-036-build-order-and-phasing]]
+related: [[system-overview]], [[user-service]], [[api-gateway]], [[ADR-012-jwt-lifecycle]], [[ADR-036-build-order-and-phasing]], [[ADR-039-dual-tier-login-rate-limiting]]
 created: 2026-08-05
-last-updated: 2026-08-14
+last-updated: 2026-08-19
 ---
 
 ## Purpose
@@ -62,6 +62,18 @@ ADR-036 Phase 1). Verified against `backend/auth-service/src/`:
   `AccessTokenIssuer` knows nothing about credentials — it turns an
   already-established identity into a token, keeping the one class holding a
   private key free of authentication branches.
+- `login/` — `LoginController` (`POST /api/v1/auth/login`), `LoginService`
+  (credential verification: dummy-hash BCrypt burn on unknown email,
+  identical `InvalidCredentialsException` for unknown-email/wrong-password/
+  locked-account so none is distinguishable from another by response or
+  timing). `LoginAttemptLimiter` (Redis, atomic `login_attempt.lua`) and
+  `User.failedLoginAttempts`/`lockedUntil` (V2 migration) implement the
+  account-abuse layer of [[ADR-039-dual-tier-login-rate-limiting]] — 5
+  failed attempts/min per email trips a 429
+  (`TooManyLoginAttemptsException`), 10 failures locks the account 15
+  minutes. Both fail open on a Redis outage. This closes what was, until
+  2026-08-19, this page's own stale "login itself... credential
+  verification does not [exist]" Gap entry below.
 - **Signing keys are ephemeral and in-memory today.** ADR-010 requires Vault
   KV v2 (loaded at startup, never on disk, deliberately not Vault Transit
   since signing happens on every login). The provider interface is the seam
@@ -127,13 +139,21 @@ service.
 
 ## Gap
 
-Everything except the above. Not implemented: login itself (token minting
-exists, credential verification does not), ADR-010's Vault-backed key
-source, ADR-012's four-phase key rotation, the
-`/refresh` endpoint with reuse detection, the `auth.revocation` producer,
-and Citus distribution by `user_id` (ADR-018 — deferred to a later
-migration since a single-node dev Postgres has nothing to distribute
-across).
+Everything except the above. Login itself is now implemented (see
+`login/` above) — this entry was stale from 2026-08-14 until 2026-08-19.
+Still not implemented: ADR-010's Vault-backed key source, ADR-012's
+four-phase key rotation, the `auth.revocation` producer, and Citus
+distribution by `user_id` (ADR-018 — deferred to a later migration since a
+single-node dev Postgres has nothing to distribute across).
+
+**Note for future sessions**: the `/refresh` endpoint and the JWT gateway
+edge routing mentioned in this repo's recent git history
+(`ef58375 feat: refresh endpoint with reuse detection`,
+`1d2241f feat(gateway): route and validate JWTs at the edge`) are not yet
+reflected in this page's Current Implementation section above — verify
+against `backend/auth-service/src/main/java/.../refresh/` and
+`backend/api-gateway/src/main/java/.../jwt/` before relying on this page
+for their status.
 
 ## Open Questions
 
