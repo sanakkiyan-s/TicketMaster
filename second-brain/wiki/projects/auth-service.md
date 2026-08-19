@@ -74,13 +74,33 @@ ADR-036 Phase 1). Verified against `backend/auth-service/src/`:
   minutes. Both fail open on a Redis outage. This closes what was, until
   2026-08-19, this page's own stale "login itself... credential
   verification does not [exist]" Gap entry below.
-- **Signing keys are ephemeral and in-memory today.** ADR-010 requires Vault
-  KV v2 (loaded at startup, never on disk, deliberately not Vault Transit
-  since signing happens on every login). The provider interface is the seam
-  for that; the current implementation generates one RSA-2048 pair per
-  process, which is correct at ONE instance and wrong at two — each replica
-  would publish only its own key and reject the other's tokens. Gated behind
-  `auth.jwt.key-source=ephemeral`, WARNs at startup.
+- **Signing keys: both providers exist, ephemeral is just the default.**
+  This page previously said Vault-backed keys were unimplemented — wrong,
+  corrected 2026-08-19 after actually reading the code rather than trusting
+  this page (the exact mistake CLAUDE.md's source-authority order warns
+  about). `EphemeralSigningKeyProvider` generates one RSA-2048 pair in
+  memory per process — correct at one instance, wrong at two, since each
+  replica would publish only its own key and reject the other's tokens;
+  gated behind `auth.jwt.key-source=ephemeral` (the config default) and
+  WARNs at startup. `VaultSigningKeyProvider` (ADR-010, `key-source=vault`)
+  is fully implemented and tested against a real Vault via Testcontainers
+  (`VaultSigningKeyProviderTest`): reads the key set from Vault KV v2
+  (never Transit — signing happens on every login/refresh, a network round
+  trip per signature is the wrong trade), caches with a refresh interval,
+  fails open on a transient Vault outage by serving the cached set, and
+  handles the multi-replica bootstrap race with a CAS-guarded first write
+  so only one replica's generated key wins.
+  **What's still actually missing**: nothing calls Vault by default in any
+  environment (`key-source` defaults to `ephemeral` everywhere including
+  presumably production config, which is itself worth double-checking
+  before a real deploy), and ADR-012's four-phase rotation state machine —
+  the thing that would ever move a key from PUBLISHED to SIGNING to
+  RETIRED — has no orchestrator. `KeyStatus` (the enum) exists; nothing
+  drives transitions between its values yet. Confirmed absent from
+  `backend/auth-service/src/main/java/.../jwt/` as of 2026-08-19: no
+  rotation-phase class, and no `auth.revocation` Kafka producer either
+  (the gateway-side consumer exists, nothing publishes to the topic it
+  reads).
 - `AuthApplicationTest` — Testcontainers Postgres, ADR-008's integration
   tier. Asserts the schema Flyway produced and that CITEXT really makes
   email comparison case-insensitive.
@@ -141,10 +161,14 @@ service.
 
 Everything except the above. Login itself is now implemented (see
 `login/` above) — this entry was stale from 2026-08-14 until 2026-08-19.
-Still not implemented: ADR-010's Vault-backed key source, ADR-012's
-four-phase key rotation, the `auth.revocation` producer, and Citus
-distribution by `user_id` (ADR-018 — deferred to a later migration since a
-single-node dev Postgres has nothing to distribute across).
+ADR-010's Vault-backed key source is also implemented (see the corrected
+Signing keys bullet above) — this Gap list previously said otherwise,
+also wrong, also corrected 2026-08-19. Still genuinely not implemented:
+ADR-012's four-phase key rotation orchestrator (no code drives a key
+through PUBLISHED -> SIGNING -> RETIRED), the `auth.revocation` producer,
+and Citus distribution by `user_id` (ADR-018 — deferred to a later
+migration since a single-node dev Postgres has nothing to distribute
+across).
 
 **Note for future sessions**: the `/refresh` endpoint and the JWT gateway
 edge routing mentioned in this repo's recent git history

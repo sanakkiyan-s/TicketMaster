@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Pre-commit gate: builds and tests only the modules the staged changes
+# actually touch, instead of a full `./gradlew build` across all 15
+# backend modules on every commit - most of them hold no code yet
+# (see root CLAUDE.md's per-service status table), and CI already runs
+# the exhaustive build on push/PR (.github/workflows/ci.yml). This hook
+# exists to catch the same class of failure LOCALLY, in seconds, before
+# it reaches CI at all.
+#
+# Not installed automatically - git does not track .git/hooks across
+# clones. One-time setup per clone:
+#   git config core.hooksPath scripts/git-hooks
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+# Every backend module directory name doubles as its Gradle module path
+# segment (settings.gradle.kts: "backend:api-gateway" <-> backend/api-gateway/),
+# so this needs no separate module map to stay in sync with settings.gradle.kts.
+backend_modules=$(printf '%s\n' "$staged" \
+    | grep -E '^backend/[^/]+/' \
+    | sed -E 's#^backend/([^/]+)/.*#\1#' \
+    | sort -u)
+
+frontend_touched=$(printf '%s\n' "$staged" | grep -c '^frontend/' || true)
+
+status=0
+
+if [ -n "$backend_modules" ]; then
+    tasks=()
+    for module in $backend_modules; do
+        tasks+=(":backend:${module}:test")
+    done
+    echo "pre-commit: testing changed backend module(s): $(echo "$backend_modules" | tr '\n' ' ')"
+    # --no-daemon: a hook that leaves a daemon running past the commit is a
+    # surprise for whatever runs next in this shell.
+    if ! ./gradlew "${tasks[@]}" --no-daemon -q; then
+        status=1
+    fi
+fi
+
+if [ "$frontend_touched" -gt 0 ]; then
+    echo "pre-commit: typechecking + testing frontend"
+    if ! (cd frontend && npm run typecheck && npm test -- run); then
+        status=1
+    fi
+fi
+
+if [ "$status" -ne 0 ]; then
+    echo ""
+    echo "pre-commit: failed - fix the above, or 'git commit --no-verify' to skip" \
+         "(only for a deliberate reason, e.g. a WIP branch nobody else builds on)."
+fi
+
+exit "$status"
