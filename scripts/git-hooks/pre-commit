@@ -21,10 +21,10 @@ fi
 # Every backend module directory name doubles as its Gradle module path
 # segment (settings.gradle.kts: "backend:api-gateway" <-> backend/api-gateway/),
 # so this needs no separate module map to stay in sync with settings.gradle.kts.
-backend_modules=$(printf '%s\n' "$staged" \
+backend_modules=$( { printf '%s\n' "$staged" \
     | grep -E '^backend/[^/]+/' \
     | sed -E 's#^backend/([^/]+)/.*#\1#' \
-    | sort -u)
+    | sort -u; } || true)
 
 frontend_touched=$(printf '%s\n' "$staged" | grep -c '^frontend/' || true)
 
@@ -45,7 +45,7 @@ fi
 
 if [ "$frontend_touched" -gt 0 ]; then
     echo "pre-commit: typechecking + testing frontend"
-    if ! (cd frontend && npm run typecheck && npm test -- run); then
+    if ! (cd frontend && npm run typecheck && npm test); then
         status=1
     fi
 fi
