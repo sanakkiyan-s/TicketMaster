@@ -175,6 +175,13 @@ Docker environment". The pin is in `subprojects` because every
 Testcontainers-backed test in every module will hit it, not just this
 service.
 
+**Containerized**: runs via `docker compose --profile backend up` (see
+`backend/Dockerfile`, `infra/docker-compose.yml`), host port 8081.
+Verified live 2026-08-19: container reports healthy,
+`GET /actuator/health` 200, and a live `POST /api/v1/auth/register`
+routed through api-gateway's container reached this container over the
+compose network.
+
 ## Target Design
 
 - Spring Boot, Spring Security, JWT (access + refresh token pair).

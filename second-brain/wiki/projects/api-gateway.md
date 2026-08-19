@@ -49,6 +49,13 @@ consumer all already existed.** Verified against `backend/api-gateway/src/`:
 of 2026-08-19 (24 tests spanning filter, rate-limit-store, and
 Kafka-Testcontainers revocation suites).
 
+**Containerized**: runs via `docker compose --profile backend up` (see
+`backend/Dockerfile`, `infra/docker-compose.yml`), host port 8080.
+Verified live 2026-08-19: container reports healthy,
+`GET /actuator/health` 200, and a live `POST /api/v1/auth/register`
+proxied correctly to auth-service's container over the compose
+network.
+
 ## Target Design
 
 **Decided: Spring Cloud Gateway.** Sits behind Nginx, not instead of it —

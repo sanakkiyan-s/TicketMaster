@@ -60,6 +60,25 @@ Verified against `backend/user-service/src/`:
 **Verification status**: `./gradlew :backend:user-service:test` green,
 13 tests, 0 failures (verified 2026-08-19).
 
+**Containerized**: runs via `docker compose --profile backend up` (see
+`backend/Dockerfile`, `infra/docker-compose.yml`), host port 8090
+(container port 8082 — 8082 collides with schema-registry's host
+mapping in the same compose file). Owns its own `user_service` Postgres
+schema — auth-service and user-service share one Postgres coordinator
+and DB name (`ticketmaster`) but each needs a separate schema, or their
+independently-versioned V1 Flyway migrations collide in
+`flyway_schema_history` (same version, different checksum). Enforced via
+`spring.flyway.schemas: user_service` +
+`spring.jpa.properties.hibernate.default_schema: user_service` in
+`application.yml` — the latter specifically because Hibernate's schema
+validation follows the connection's search_path independent of any
+`currentSchema` JDBC URL param, which matters here because test config
+overrides `spring.datasource.url` directly (Testcontainers) without that
+param. Verified live 2026-08-19: container reports healthy,
+`GET /actuator/health` 200, and a live `POST /api/v1/auth/register`
+routed through api-gateway's container to auth-service's container
+over the compose network.
+
 ## Target Design
 
 - Spring Boot, Spring Data JPA, PostgreSQL.
