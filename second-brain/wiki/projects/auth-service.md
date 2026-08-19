@@ -207,16 +207,37 @@ transactional-outbox pattern; `revocation/` package's `/logout`,
 via the new `jwt/TokenVerifier` — real signature checking against this
 service's own `SigningKeyProvider`, not an unverified decode, since this
 service (unlike a downstream consumer) actually holds the key material.
-**Specified but not registered, 2026-08-19**: the Kafka Connect/Debezium
-connector config that bridges the `outbox` table to `auth.revocation`
+**Verified working end-to-end, 2026-08-19**: the Kafka Connect/Debezium
+connector bridging the `outbox` table to `auth.revocation`
 (`infra/kafka-connect/auth-outbox-connector.json` +
-`register-auth-outbox-connector.sh`) and the `wal_level=logical` change
-on `postgres-coordinator` it needs. Registering it against a live compose
-stack — running `docker compose up` and then the registration script —
-has not happened in this session. Until it does, outbox rows are written
-correctly but nothing ships them to the `auth.revocation` topic; see
-[[api-gateway]] for the consumer side, which is built and tested but has
-nothing to consume until then.
+`register-auth-outbox-connector.sh`) was registered against a live
+compose stack and proven with a real request: `POST
+/api/v1/auth/logout-everywhere` → outbox row → Debezium → the topic →
+[[api-gateway]]'s `RevocationConsumer` → a previously-issued access token
+for that user rejected with 401 through the gateway, while a token
+issued *after* the revocation still worked. Three real bugs surfaced and
+were fixed in the process, none of them application code:
+
+- `docker-compose.yml`'s Kafka Connect worker pointed
+  `KEY_CONVERTER`/`VALUE_CONVERTER` at
+  `io.confluent.connect.avro.AvroConverter` — a class the plain
+  `debezium/connect` image (as opposed to Confluent's own
+  `cp-kafka-connect`) does not bundle. The worker crash-looped on
+  startup before any connector could ever register. Switched the
+  worker default to `JsonConverter`.
+- The connector's `table.field.event.timestamp: created_at` mapping
+  assumed an INT64 column; `created_at` is `TIMESTAMPTZ`, which Debezium
+  represents as a string, not INT64 — the task died parsing the very
+  first row. Removed the mapping; the outbox event-router SMT falls
+  back to Debezium's own CDC envelope timestamp when this is unset,
+  which is all this feature ever needed.
+- The connector's `value.converter: JsonConverter` double-encoded a
+  payload that arrives from Debezium already as a JSON string (JSONB
+  columns are represented as plain text) — the topic held an
+  escaped, quoted string instead of raw JSON, which
+  `RevocationConsumer`'s Jackson parser correctly rejected. Switched to
+  `StringConverter` for both key and value, matching what a raw
+  `KafkaConsumer<String,String>` actually expects on the wire.
 
 Still genuinely not implemented: cross-region rotation/revocation
 concerns (single-region only), and Citus distribution by `user_id`

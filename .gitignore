@@ -37,3 +37,7 @@ dist/
 
 # Vault dev data
 infra/vault/data/
+
+# scripts/dev.sh's own bookkeeping for backend processes it launched
+# (PID files, per-service log files) - never anything worth committing.
+.dev/

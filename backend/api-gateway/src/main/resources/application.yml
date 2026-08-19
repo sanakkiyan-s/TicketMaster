@@ -20,7 +20,7 @@ spring:
     # spring-kafka @KafkaListener container, so it can control the
     # partition-assign / seek-to-beginning / end-offset sequence needed to
     # know precisely when it has caught up - see RevocationConsumer.
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
 
   cloud:
     gateway:

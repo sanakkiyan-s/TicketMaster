@@ -120,10 +120,19 @@ services:
       CONFIG_STORAGE_TOPIC: connect_configs
       OFFSET_STORAGE_TOPIC: connect_offsets
       STATUS_STORAGE_TOPIC: connect_statuses
-      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
-      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      # Plain debezium/connect does not bundle Confluent's Avro converter
+      # (io.confluent.connect.avro.AvroConverter) - that class only ships
+      # inside Confluent's own cp-kafka-connect image. Pointing the
+      # worker at it here crash-loops on startup before any connector
+      # ever registers. Nothing in this project produces Avro-schema
+      # data yet, so JSON (schemas disabled) is the correct worker
+      # default, not a workaround - auth-outbox-connector.json overrides
+      # per-connector anyway (String key / JSON value) to match
+      # RevocationConsumer's plain KafkaConsumer<String,String>.
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
       # Worker-level defaults above stay Avro for connectors that want
       # schema-registry-backed serde. auth-outbox-connector.json overrides
       # both to plain string/JSON per-connector (RevocationConsumer is a
