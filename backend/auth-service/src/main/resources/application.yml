@@ -87,6 +87,18 @@ auth:
       # production: it means the service will mint its own signing key.
       bootstrap-if-empty: ${JWT_VAULT_BOOTSTRAP:false}
 
+    rotation:
+      # ADR-012's real production numbers. Tests override these to a few
+      # milliseconds via @DynamicPropertySource rather than waiting on
+      # real minutes - see RotationOrchestratorTest.
+      publish-duration: PT15M
+      drain-duration: PT30M
+      # How often RotationScheduler checks whether the current phase's
+      # minimum duration has elapsed. Well under publish-duration so a
+      # phase does not run meaningfully longer than configured before the
+      # scheduler notices.
+      scheduler-interval: PT2M
+
   refresh-cookie:
     # Secure means the browser never sends it over plaintext HTTP. True by
     # default because getting this wrong exposes a 30-day credential on the

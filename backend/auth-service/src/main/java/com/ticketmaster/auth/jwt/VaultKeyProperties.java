@@ -29,7 +29,7 @@ import java.time.Duration;
  */
 @ConfigurationProperties(prefix = "auth.jwt.vault")
 @Validated
-record VaultKeyProperties(
+public record VaultKeyProperties(
         @NotBlank String uri,
         @NotBlank String token,
         @NotBlank String backend,

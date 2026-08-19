@@ -9,11 +9,17 @@
     "url" : "/"
   } ],
   "tags" : [ {
+    "name" : "admin-keys",
+    "description" : "ADR-012 key rotation controls (ADMIN only)"
+  }, {
     "name" : "jwks",
     "description" : "Public signing keys for token verification"
   }, {
     "name" : "auth",
     "description" : "Registration, login and token lifecycle"
+  }, {
+    "name" : "admin-users",
+    "description" : "Admin user management (ADMIN only)"
   } ],
   "paths" : {
     "/api/v1/auth/register" : {
@@ -104,6 +110,48 @@
         }
       }
     },
+    "/api/v1/auth/logout" : {
+      "post" : {
+        "tags" : [ "auth" ],
+        "summary" : "Log out the current device",
+        "description" : "Revokes only the calling session (`sid` claim of the presented access token). Other devices stay logged in. Clears the refresh cookie.",
+        "operationId" : "logout",
+        "parameters" : [ {
+          "name" : "Authorization",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout-everywhere" : {
+      "post" : {
+        "tags" : [ "auth" ],
+        "summary" : "Log out every device",
+        "description" : "Revokes every session the calling user has, on every device. Clears the refresh cookie for the device that called this endpoint.",
+        "operationId" : "logoutEverywhere",
+        "parameters" : [ {
+          "name" : "Authorization",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
     "/api/v1/auth/login" : {
       "post" : {
         "tags" : [ "auth" ],
@@ -140,6 +188,87 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/admin/users/{id}/ban" : {
+      "post" : {
+        "tags" : [ "admin-users" ],
+        "summary" : "Ban a user",
+        "description" : "Revokes every session the user has, platform-wide, and every refresh token family. ADR-030: admin actions skip ownership checks by design.",
+        "operationId" : "ban",
+        "parameters" : [ {
+          "name" : "Authorization",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/BanRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/admin/keys/rotate" : {
+      "post" : {
+        "tags" : [ "admin-keys" ],
+        "summary" : "Start a key rotation now",
+        "description" : "Begins ADR-012 phase 1 (PUBLISH), outside the normal 90-day schedule.",
+        "operationId" : "rotate",
+        "parameters" : [ {
+          "name" : "Authorization",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/admin/keys/compromise" : {
+      "post" : {
+        "tags" : [ "admin-keys" ],
+        "summary" : "Compromise response: skip straight to phase 4",
+        "description" : "Destroys the current signing key's private material immediately. Every live access token dies; refresh tokens are unaffected since they are opaque.",
+        "operationId" : "compromise",
+        "parameters" : [ {
+          "name" : "Authorization",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
           }
         }
       }
@@ -297,6 +426,17 @@
             "uniqueItems" : true
           }
         }
+      },
+      "BanRequest" : {
+        "type" : "object",
+        "properties" : {
+          "reason" : {
+            "type" : "string",
+            "maxLength" : 500,
+            "minLength" : 0
+          }
+        },
+        "required" : [ "reason" ]
       }
     }
   }

@@ -106,6 +106,18 @@ public class RefreshTokenService {
         return new RotatedSession(token.getUserId(), token.getSessionId(), issued);
     }
 
+    /** ADR-012 self-service logout: revokes only the caller's own session. */
+    @Transactional
+    public int revokeSession(UUID sessionId) {
+        return tokens.revokeBySessionId(sessionId, Instant.now(clock));
+    }
+
+    /** ADR-012 "log out everywhere" and the admin ban path: every session a user has. */
+    @Transactional
+    public int revokeAllForUser(UUID userId) {
+        return tokens.revokeAllByUserId(userId, Instant.now(clock));
+    }
+
     @Transactional
     public IssuedRefreshToken issue(UUID userId, UUID familyId, UUID sessionId) {
         byte[] entropy = new byte[TOKEN_BYTES];

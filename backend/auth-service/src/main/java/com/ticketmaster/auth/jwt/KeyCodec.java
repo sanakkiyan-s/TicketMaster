@@ -19,21 +19,26 @@ import java.util.Base64;
  * exactly what `openssl genpkey` and `openssl rsa -pubout -outform DER`
  * produce, so a key can be generated and inspected with ordinary tools
  * instead of only by this code.
+ *
+ * Public, not package-private: {@code jwt.rotation} generates and encodes
+ * new keys the same way {@link VaultSigningKeyProvider#bootstrapFirstKey()}
+ * does, and must produce byte-identical encoding or a key minted by
+ * rotation would round-trip differently than one seeded at bootstrap.
  */
-final class KeyCodec {
+public final class KeyCodec {
 
     private KeyCodec() {
     }
 
-    static String encodePrivate(java.security.PrivateKey key) {
+    public static String encodePrivate(java.security.PrivateKey key) {
         return Base64.getEncoder().encodeToString(key.getEncoded());
     }
 
-    static String encodePublic(java.security.PublicKey key) {
+    public static String encodePublic(java.security.PublicKey key) {
         return Base64.getEncoder().encodeToString(key.getEncoded());
     }
 
-    static java.security.interfaces.RSAPrivateKey decodePrivate(String base64) {
+    public static java.security.interfaces.RSAPrivateKey decodePrivate(String base64) {
         try {
             return (java.security.interfaces.RSAPrivateKey) rsa()
                     .generatePrivate(new PKCS8EncodedKeySpec(Base64.getDecoder().decode(base64)));
@@ -43,7 +48,7 @@ final class KeyCodec {
         }
     }
 
-    static java.security.interfaces.RSAPublicKey decodePublic(String base64) {
+    public static java.security.interfaces.RSAPublicKey decodePublic(String base64) {
         try {
             return (java.security.interfaces.RSAPublicKey) rsa()
                     .generatePublic(new X509EncodedKeySpec(Base64.getDecoder().decode(base64)));

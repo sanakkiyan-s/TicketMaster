@@ -72,6 +72,20 @@ public class SecurityConfig {
                         // or a healthy pod looks unhealthy to Kubernetes.
                         .requestMatchers("/actuator/health/**").permitAll()
 
+                        // ADR-012's admin/self-service revocation and rotation
+                        // endpoints authenticate themselves: TokenVerifier
+                        // checks the bearer token's signature directly
+                        // (this service holds the real key material), so
+                        // Spring Security's own filter chain - which has no
+                        // AuthenticationProvider configured for bearer
+                        // tokens at all - is not the right layer to gate
+                        // these routes. permitAll here means "let the
+                        // request through to the controller", not "no
+                        // authentication happens".
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout-everywhere").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/admin/**").permitAll()
+
                         // JWKS is public BY DESIGN — it carries only public key
                         // material, and every gateway must fetch it without a
                         // credential (a token cannot be the credential for
