@@ -50,7 +50,7 @@ class UserServiceApplicationTest {
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(
                      "SELECT table_name FROM information_schema.tables " +
-                     "WHERE table_schema = 'public' ORDER BY table_name")) {
+                     "WHERE table_schema = 'user_service' ORDER BY table_name")) {
 
             StringBuilder found = new StringBuilder();
             while (rs.next()) {

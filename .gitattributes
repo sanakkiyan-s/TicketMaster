@@ -1,0 +1,7 @@
+# gradlew is a POSIX shell script; a CRLF checkout (the Windows default)
+# breaks its shebang the moment it runs anywhere other than Windows -
+# discovered when the backend Docker build failed with "./gradlew: not
+# found" despite the file being present, because its interpreter line
+# effectively read "#!/bin/sh\r". Force LF regardless of platform.
+gradlew text eol=lf
+*.sh text eol=lf

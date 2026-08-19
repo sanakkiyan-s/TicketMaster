@@ -162,6 +162,107 @@ services:
     ports:
       - "8200:8200"
 
+  # --- Backend services (ADR-036 Phase 1) --------------------------
+  # Gated behind the "backend" profile: `docker compose up` (the infra
+  # command dev.sh already runs) never starts these unless asked, since
+  # most work on infra alone doesn't need a multi-minute Gradle image
+  # build. `docker compose --profile backend up` (dev.sh's `backend`
+  # command) does. Host ports match each service's own application.yml
+  # default (8080/8081/8082); in-network hostnames/ports below are the
+  # compose service name and the CONTAINER port, not the host-published
+  # one - api-gateway's REDIS_PORT default of 6380 and
+  # KAFKA_BOOTSTRAP_SERVERS default of :29092 are host-side workarounds
+  # for a locally-installed Redis/Kafka and do not apply from inside
+  # this network, where redis:6379 and kafka:9092 are unambiguous.
+  auth-service:
+    profiles: ["backend"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        MODULE: auth-service
+    environment:
+      DB_HOST: postgres-coordinator
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      VAULT_URI: http://vault:8200
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      JWT_KEY_SOURCE: vault
+      JWT_VAULT_BOOTSTRAP: "true"
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres-coordinator:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_started
+      kafka:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  api-gateway:
+    profiles: ["backend"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        MODULE: api-gateway
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      AUTH_SERVICE_URI: http://auth-service:8081
+      JWKS_URI: http://auth-service:8081/.well-known/jwks.json
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  user-service:
+    profiles: ["backend"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        MODULE: user-service
+    environment:
+      DB_HOST: postgres-coordinator
+      DB_PORT: "5432"
+    ports:
+      # Host 8082 is already schema-registry's (see above) - only the
+      # host-side mapping changes, the container's own port stays 8082
+      # (its application.yml default), so nothing in the service's own
+      # config needs to know about this.
+      - "8090:8082"
+    depends_on:
+      postgres-coordinator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
   # --- MinIO (S3-compatible object storage, ADR-017) ---
   minio:
     image: minio/minio:RELEASE.2024-10-13T13-34-11Z

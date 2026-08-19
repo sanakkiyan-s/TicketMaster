@@ -6,16 +6,19 @@
 #
 #   infra/     Postgres (Citus coordinator + worker), PgBouncer, Redis,
 #              Kafka + Schema Registry + Connect, Vault, MinIO.
+#   backend/   auth-service (:8081), api-gateway (:8080), user-service
+#              (:8082) - the only three modules with real sources so far
+#              (ADR-036 Phase 1). Built and run as containers via the
+#              same docker-compose.yml, gated behind the "backend"
+#              profile so plain infra startup never pays their build
+#              time. The other 12 backend/* directories hold build
+#              files only - nothing to run.
 #   frontend/  Vite dev server on :5173.
 #
-# What it CANNOT start: any backend service. `backend/*` contains build
-# files only — zero Java/Kotlin sources exist yet (ADR-036 phase 0). So
-# api-gateway is not running, and every /api call the frontend makes will
-# fail at the Vite proxy until it does. That is expected, not a bug.
-#
 # Usage:
-#   ./scripts/dev.sh            infra + frontend (default)
+#   ./scripts/dev.sh            infra + backend + frontend (default)
 #   ./scripts/dev.sh infra      containers only
+#   ./scripts/dev.sh backend    auth-service/api-gateway/user-service (assumes infra already up)
 #   ./scripts/dev.sh frontend   Vite only (assumes infra already up)
 #   ./scripts/dev.sh down       stop containers
 #   ./scripts/dev.sh reset      stop containers AND delete volumes
@@ -33,6 +36,11 @@ ENV_FILE="$ROOT/infra/.env"
 # report "running" the moment the process starts, which says nothing
 # about readiness.
 HEALTHCHECKED=(postgres-coordinator postgres-worker-1 redis minio)
+
+# Backend containers declare their own healthcheck (Dockerfile installs
+# curl for exactly this) - same wait_for_health mechanism as infra,
+# different list, since these only run under the "backend" profile.
+BACKEND_HEALTHCHECKED=(auth-service api-gateway user-service)
 
 WAIT_TIMEOUT_SECONDS=180
 
@@ -80,7 +88,7 @@ seed_env() {
 wait_for_health() {
   local deadline=$(( SECONDS + WAIT_TIMEOUT_SECONDS ))
 
-  for service in "${HEALTHCHECKED[@]}"; do
+  for service in "$@"; do
     printf '    %-22s' "$service"
 
     while true; do
@@ -194,6 +202,16 @@ print_endpoints() {
 EOF
 }
 
+print_backend_endpoints() {
+  cat <<'EOF'
+
+    api-gateway     http://localhost:8080
+    auth-service    http://localhost:8081
+    user-service    http://localhost:8090   (container's own port is 8082 - 8082 is schema-registry's host mapping)
+
+EOF
+}
+
 # compose gets the env file via --env-file, but this script's own checks
 # need the same values. Sourced with `set -a` so every assignment is
 # exported to the docker invocations below.
@@ -214,7 +232,7 @@ start_infra() {
   compose up --detach --remove-orphans
 
   info "waiting for health"
-  if ! wait_for_health; then
+  if ! wait_for_health "${HEALTHCHECKED[@]}"; then
     die "infra did not come up cleanly"
   fi
 
@@ -223,6 +241,21 @@ start_infra() {
   fi
 
   print_endpoints
+}
+
+start_backend() {
+  require_tools
+
+  info "building and starting backend containers (auth-service, api-gateway, user-service)"
+  info "first build compiles the whole Gradle multi-module tree - can take a few minutes"
+  compose --profile backend up --detach --build
+
+  info "waiting for health"
+  if ! wait_for_health "${BACKEND_HEALTHCHECKED[@]}"; then
+    die "backend did not come up cleanly"
+  fi
+
+  print_backend_endpoints
 }
 
 start_frontend() {
@@ -237,9 +270,6 @@ start_frontend() {
   cat <<'EOF'
 
     Frontend        http://localhost:5173
-    Backend         NOT RUNNING — backend/* has no sources yet.
-                    /api/* calls will fail at the Vite proxy until
-                    api-gateway exists on :8080. Expected for now.
 
 EOF
 
@@ -251,11 +281,15 @@ EOF
 case "${1:-all}" in
   all)
     start_infra
+    start_backend
     start_frontend
     ;;
   infra)
     start_infra
-    info "frontend not started. run:  ./scripts/dev.sh frontend"
+    info "backend not started. run:  ./scripts/dev.sh backend"
+    ;;
+  backend)
+    start_backend
     ;;
   frontend)
     start_frontend
@@ -283,6 +317,6 @@ case "${1:-all}" in
     compose logs --follow --tail 100 "$@"
     ;;
   *)
-    die "unknown command '${1}'. try: all | infra | frontend | down | reset | status | logs"
+    die "unknown command '${1}'. try: all | infra | backend | frontend | down | reset | status | logs"
     ;;
 esac
