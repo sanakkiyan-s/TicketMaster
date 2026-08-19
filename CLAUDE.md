@@ -42,9 +42,9 @@ concretely why — cite the ADR you'd supersede.
 
 | Path | Service | Status |
 |---|---|---|
-| `backend/api-gateway` | Edge routing, auth token validation, rate limiting | not started |
-| `backend/auth-service` | Identity, JWT issuance/refresh, roles | not started |
-| `backend/user-service` | User profile, payment methods on file, preferences | not started |
+| `backend/api-gateway` | Edge routing, auth token validation, rate limiting | in progress — see [[api-gateway]] |
+| `backend/auth-service` | Identity, JWT issuance/refresh, roles | in progress — see [[auth-service]] |
+| `backend/user-service` | User profile, payment methods on file, preferences | in progress — see [[user-service]] |
 | `backend/event-service` | Events, sessions/shows, artist/performer data | not started |
 | `backend/venue-service` | Venues, seating layout/seat maps | not started |
 | `backend/search-service` | Denormalized search/discovery index (fed by event/venue events) | not started |

@@ -1,0 +1,313 @@
+{
+  "openapi" : "3.1.0",
+  "info" : {
+    "title" : "user-service",
+    "description" : "User profile, preferences and saved payment-method\nreferences.\n\nReached through api-gateway at the same paths shown\nhere — the gateway does not rewrite /api/v1.",
+    "version" : "v1"
+  },
+  "servers" : [ {
+    "url" : "/"
+  } ],
+  "tags" : [ {
+    "name" : "profile",
+    "description" : "The authenticated user's profile"
+  }, {
+    "name" : "payment-methods",
+    "description" : "The authenticated user's saved payment method references"
+  }, {
+    "name" : "preferences",
+    "description" : "The authenticated user's notification preferences"
+  } ],
+  "paths" : {
+    "/api/v1/users/me" : {
+      "get" : {
+        "tags" : [ "profile" ],
+        "summary" : "Get the authenticated user's profile",
+        "description" : "Auto-creates an empty profile row on first access — see ProfileService.getOrCreate.",
+        "operationId" : "get",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "profile" ],
+        "summary" : "Update the authenticated user's profile",
+        "operationId" : "update",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/preferences" : {
+      "get" : {
+        "tags" : [ "preferences" ],
+        "summary" : "Get the authenticated user's preferences",
+        "description" : "Defaults: emailOptIn true, smsOptIn false. Auto-created on first access.",
+        "operationId" : "get_1",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PreferencesResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put" : {
+        "tags" : [ "preferences" ],
+        "summary" : "Update the authenticated user's preferences",
+        "operationId" : "update_1",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdatePreferencesRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PreferencesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/payment-methods" : {
+      "get" : {
+        "tags" : [ "payment-methods" ],
+        "summary" : "List the authenticated user's saved payment methods",
+        "operationId" : "list",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "array",
+                  "items" : {
+                    "$ref" : "#/components/schemas/PaymentMethodResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "payment-methods" ],
+        "summary" : "Save a new payment method reference",
+        "description" : "Persists a provider-issued reference as given — see AddPaymentMethodRequest's javadoc for why no validation against payment-service happens here.",
+        "operationId" : "add",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/AddPaymentMethodRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/PaymentMethodResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/payment-methods/{id}" : {
+      "delete" : {
+        "tags" : [ "payment-methods" ],
+        "summary" : "Delete a saved payment method",
+        "description" : "Returns 404 for both an unknown id and one belonging to another user — see PaymentMethodNotFoundException's javadoc.",
+        "operationId" : "delete",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string",
+            "format" : "uuid"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "OK"
+          }
+        }
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "UpdateProfileRequest" : {
+        "type" : "object",
+        "properties" : {
+          "displayName" : {
+            "type" : "string",
+            "maxLength" : 255,
+            "minLength" : 0
+          },
+          "phoneNumber" : {
+            "type" : "string",
+            "maxLength" : 32,
+            "minLength" : 0
+          },
+          "avatarUrl" : {
+            "type" : "string",
+            "maxLength" : 2048,
+            "minLength" : 0
+          }
+        }
+      },
+      "ProfileResponse" : {
+        "type" : "object",
+        "properties" : {
+          "userId" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "displayName" : {
+            "type" : "string"
+          },
+          "phoneNumber" : {
+            "type" : "string"
+          },
+          "avatarUrl" : {
+            "type" : "string"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "UpdatePreferencesRequest" : {
+        "type" : "object",
+        "properties" : {
+          "emailOptIn" : {
+            "type" : "boolean"
+          },
+          "smsOptIn" : {
+            "type" : "boolean"
+          }
+        },
+        "required" : [ "emailOptIn", "smsOptIn" ]
+      },
+      "PreferencesResponse" : {
+        "type" : "object",
+        "properties" : {
+          "emailOptIn" : {
+            "type" : "boolean"
+          },
+          "smsOptIn" : {
+            "type" : "boolean"
+          }
+        }
+      },
+      "AddPaymentMethodRequest" : {
+        "type" : "object",
+        "properties" : {
+          "provider" : {
+            "type" : "string",
+            "maxLength" : 64,
+            "minLength" : 0
+          },
+          "providerToken" : {
+            "type" : "string",
+            "maxLength" : 512,
+            "minLength" : 0
+          },
+          "brand" : {
+            "type" : "string",
+            "maxLength" : 32,
+            "minLength" : 0
+          },
+          "last4" : {
+            "type" : "string",
+            "maxLength" : 4,
+            "minLength" : 0
+          }
+        },
+        "required" : [ "provider", "providerToken" ]
+      },
+      "PaymentMethodResponse" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "provider" : {
+            "type" : "string"
+          },
+          "brand" : {
+            "type" : "string"
+          },
+          "last4" : {
+            "type" : "string"
+          },
+          "isDefault" : {
+            "type" : "boolean"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      }
+    }
+  }
+}
