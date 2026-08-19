@@ -140,6 +140,26 @@ class VaultSigningKeyProviderTest {
     }
 
     @Test
+    void twoInstancesBootstrappingTheSamePathConvergeOnOneKey() {
+        // The multi-replica case. Both are told to bootstrap and both find the
+        // path empty, so both generate a key - but the CAS create means only
+        // one lands, and the loser must ADOPT the winner's key.
+        //
+        // With a plain last-write-wins put this fails: the second instance
+        // overwrites the first, the first keeps signing with a kid that is no
+        // longer in JWKS, and the gateway rejects every token it issues until
+        // its cache expires.
+        VaultSigningKeyProvider first =
+                new VaultSigningKeyProvider(template, properties("race", true), Clock.systemUTC());
+        VaultSigningKeyProvider second =
+                new VaultSigningKeyProvider(template, properties("race", true), Clock.systemUTC());
+
+        assertEquals(first.signing().kid(), second.signing().kid(),
+                "replicas disagree on the signing key");
+        assertEquals(1, first.published().size(), "the losing bootstrap left a second key behind");
+    }
+
+    @Test
     void bootstrapWritesAKeyThatLaterReadsBack() {
         // The dev path. What matters is that the generated key is PERSISTED:
         // if it stayed in memory, two replicas would each bootstrap their own

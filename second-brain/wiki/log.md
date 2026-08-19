@@ -1010,3 +1010,66 @@ notification design discussed earlier (KodeKloud FCM/pub-sub comparison).
 - 31 tests green; `./gradlew build` passes on all 15 modules.
 - Still open: ADR-012's four-phase rotation is now REPRESENTABLE but not
   implemented - no KeyRotationService advances the phases yet.
+
+## 2026-08-18 (cont. - refresh endpoint, and a bootstrap race fixed)
+
+### Fixed
+- **Bootstrap race in the Vault provider, from code committed the same day.**
+  `kv.put` was unconditional, so with several replicas starting against an
+  empty path each generated a key and the last write won. The losers kept
+  signing with a kid that was no longer in JWKS until their 60s cache expired,
+  and the gateway rejected every token they issued - the ephemeral provider's
+  split-key defect, reintroduced through the bootstrap door. Now a CAS-0
+  create ("only if absent"); exactly one instance wins, and the losers
+  DISCARD the key they generated and adopt the winner's. Surfaced by a
+  question about multi-instance behaviour, not by a test.
+- **Reuse detection was being rolled back.** `rotate()` is `@Transactional`
+  and ends by throwing on reuse; a RuntimeException rolls back by default, so
+  the family revocation that detection had just performed was undone. The
+  attacker got a 401 and kept a working token, while the log claimed the
+  family was revoked. Now `noRollbackFor = InvalidRefreshTokenException`.
+  Caught by the test presenting the ATTACKER's rotated token after the 401
+  rather than stopping at the 401.
+
+### Added
+- `POST /api/v1/auth/refresh` - `refresh/RefreshController`, `RefreshResponse`.
+- `token/` - `RotatedSession`, `InvalidRefreshTokenException`, `rotate()` on
+  `RefreshTokenService`, plus `claim` and `revokeFamily` repository queries.
+- `RefreshCookie` moved `login/` -> `token/`: two features need it now, and
+  ADR-037 puts genuinely cross-feature pieces where both can reach them.
+- `RefreshTest` - 6 tests.
+
+### Notes
+- **The claim is one conditional UPDATE**, `WHERE used_at IS NULL`. Reading
+  then writing in two statements loses the race: two parallel refreshes both
+  read null, both rotate, and one token yields two live chains - which is
+  indistinguishable from theft. The database arbitrates; the loser gets 0 rows.
+- A losing race is treated as theft, which does log out a legitimate client
+  that double-submitted. Accepted deliberately: the two are indistinguishable
+  from the server, and guessing the other way lets an attacker keep a live
+  30-day credential.
+- **Roles are re-read from the database on every refresh**, never copied from
+  the old token. That bounds privilege staleness to one access-token lifetime
+  - a user demoted five minutes ago stops being an admin at their next
+  refresh, with no revocation machinery involved.
+- Rotation keeps the same `family_id` AND the same `session_id`. A fresh
+  session id per refresh would make "log out this device" unimplementable,
+  since the identifier a revocation targets would change every ten minutes.
+- All four failure modes (unknown / expired / revoked / replayed) return the
+  same 401 with no detail. The reason exists only in the log. "Reuse detected"
+  would tell an attacker their stolen token was noticed; "expired" rather than
+  "unknown" would confirm the token was real.
+- 38 tests green; `./gradlew build` passes on all 15 modules.
+- Still not implemented: the `auth.revocation` Kafka producer (ADR-012
+  amendment), so a revoked family is not yet pushed to gateway memory - a
+  revoked refresh token is dead, but access tokens already issued stay valid
+  for up to their 10 minutes.
+
+### Answered (from a question, worth keeping)
+- Rotation has NO trigger anywhere. `KeyStatus` is a model nothing writes to.
+  A per-replica timer would be the wrong shape: ten replicas advancing a phase
+  concurrently produce two SIGNING keys, which the provider refuses to load,
+  so a botched rotation would take down every instance at its next refresh.
+  The workable shapes are a Kubernetes CronJob (one pod by construction),
+  leader election, or an admin-triggered endpoint - with CAS underneath all
+  three. The CronJob option is blocked on the manifest-delivery Open Decision.

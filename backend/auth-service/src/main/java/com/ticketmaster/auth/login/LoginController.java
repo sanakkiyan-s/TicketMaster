@@ -2,6 +2,7 @@ package com.ticketmaster.auth.login;
 
 import com.ticketmaster.auth.jwt.TokenMinting;
 import com.ticketmaster.auth.token.IssuedRefreshToken;
+import com.ticketmaster.auth.token.RefreshCookie;
 import com.ticketmaster.auth.token.RefreshTokenService;
 import com.ticketmaster.auth.user.User;
 import io.swagger.v3.oas.annotations.Operation;

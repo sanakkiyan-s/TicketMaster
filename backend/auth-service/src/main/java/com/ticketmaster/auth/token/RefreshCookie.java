@@ -1,6 +1,5 @@
-package com.ticketmaster.auth.login;
+package com.ticketmaster.auth.token;
 
-import com.ticketmaster.auth.token.IssuedRefreshToken;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
@@ -24,9 +23,9 @@ import java.time.Duration;
  *               some other route.
  */
 @Component
-class RefreshCookie {
+public class RefreshCookie {
 
-    static final String NAME = "refresh_token";
+    public static final String NAME = "refresh_token";
 
     private final boolean secure;
 
@@ -34,7 +33,7 @@ class RefreshCookie {
         this.secure = secure;
     }
 
-    ResponseCookie build(IssuedRefreshToken token, Duration lifetime) {
+    public ResponseCookie build(IssuedRefreshToken token, Duration lifetime) {
         return ResponseCookie.from(NAME, token.rawToken())
                 .httpOnly(true)
                 .secure(secure)

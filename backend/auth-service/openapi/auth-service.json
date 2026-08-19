@@ -66,6 +66,44 @@
         }
       }
     },
+    "/api/v1/auth/refresh" : {
+      "post" : {
+        "tags" : [ "auth" ],
+        "summary" : "Exchange a refresh token for a new token pair",
+        "description" : "Takes no request body. The refresh token is read from the\nhttpOnly cookie the browser replays automatically, which is\nwhy JavaScript never needs to hold it.\n\nThe presented token is consumed: refresh tokens are\nsingle-use, and presenting one twice is treated as theft.\nThat revokes every token in the family, so the legitimate\nuser is signed out too - the intended trade against an\nattacker keeping a 30-day credential.",
+        "operationId" : "refresh",
+        "parameters" : [ {
+          "name" : "refresh_token",
+          "in" : "cookie",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Rotated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RefreshResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Unknown, expired, revoked or replayed token - the response does not distinguish them",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/login" : {
       "post" : {
         "tags" : [ "auth" ],
@@ -189,6 +227,21 @@
               "type" : "string"
             },
             "uniqueItems" : true
+          }
+        }
+      },
+      "RefreshResponse" : {
+        "type" : "object",
+        "properties" : {
+          "accessToken" : {
+            "type" : "string"
+          },
+          "tokenType" : {
+            "type" : "string"
+          },
+          "expiresIn" : {
+            "type" : "integer",
+            "format" : "int64"
           }
         }
       },

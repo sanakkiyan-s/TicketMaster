@@ -6,8 +6,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.vault.core.VaultKeyValueOperations;
 import org.springframework.vault.core.VaultKeyValueOperationsSupport.KeyValueBackend;
+import org.springframework.vault.VaultException;
 import org.springframework.vault.core.VaultTemplate;
+import org.springframework.vault.core.VaultVersionedKeyValueOperations;
 import org.springframework.vault.support.VaultResponseSupport;
+import org.springframework.vault.support.Versioned;
 
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -42,6 +45,7 @@ class VaultSigningKeyProvider implements SigningKeyProvider {
     private static final int KEY_SIZE = 2048;
 
     private final VaultKeyValueOperations kv;
+    private final VaultVersionedKeyValueOperations versionedKv;
     private final VaultKeyProperties properties;
     private final Clock clock;
 
@@ -49,6 +53,7 @@ class VaultSigningKeyProvider implements SigningKeyProvider {
 
     VaultSigningKeyProvider(VaultTemplate vault, VaultKeyProperties properties, Clock clock) {
         this.kv = vault.opsForKeyValue(properties.backend(), KeyValueBackend.KV_2);
+        this.versionedKv = vault.opsForVersionedKeyValue(properties.backend());
         this.properties = properties;
         this.clock = clock;
 
@@ -115,7 +120,24 @@ class VaultSigningKeyProvider implements SigningKeyProvider {
                         "no signing keys at " + properties.backend() + "/" + properties.path()
                                 + " - seed one, or set auth.jwt.vault.bootstrap-if-empty=true for local dev");
             }
-            entries = List.of(bootstrapFirstKey());
+            bootstrapFirstKey();
+
+            // Re-read unconditionally, including on the path where this
+            // instance won the create. With several replicas starting against
+            // an empty Vault, exactly one create succeeds; the losers must
+            // adopt the winner's key rather than the one they generated, or
+            // they would sign with a kid that is not in JWKS and every token
+            // they issue would be rejected.
+            response = kv.get(properties.path(), Map.class);
+            data = response == null ? null : response.getData();
+            entries = data == null
+                    ? List.of()
+                    : (List<Map<String, String>>) data.getOrDefault("keys", List.of());
+
+            if (entries.isEmpty()) {
+                throw new IllegalStateException(
+                        "bootstrap wrote no key to " + properties.backend() + "/" + properties.path());
+            }
         }
 
         List<SigningKey> keys = new ArrayList<>();
@@ -150,8 +172,20 @@ class VaultSigningKeyProvider implements SigningKeyProvider {
         return loaded;
     }
 
-    /** Dev convenience only - see VaultKeyProperties#bootstrapIfEmpty. */
-    private Map<String, String> bootstrapFirstKey() {
+    /**
+     * Dev convenience only - see VaultKeyProperties#bootstrapIfEmpty.
+     *
+     * Writes with CAS 0, which Vault honours as "create only if this key does
+     * not already exist". A plain put is last-write-wins: two replicas booting
+     * together would each generate a key, the second would overwrite the
+     * first, and the first would keep signing with a kid that no longer
+     * appears in JWKS until its cache expired - reintroducing exactly the
+     * split-key failure this provider exists to prevent.
+     *
+     * Losing the race is the normal outcome, not an error. The caller re-reads
+     * either way.
+     */
+    private void bootstrapFirstKey() {
         log.warn("no signing key in Vault; generating one because "
                 + "auth.jwt.vault.bootstrap-if-empty is enabled. Never set that in production.");
 
@@ -170,7 +204,13 @@ class VaultSigningKeyProvider implements SigningKeyProvider {
         entry.put("publicKey", KeyCodec.encodePublic(pair.getPublic()));
         entry.put("privateKey", KeyCodec.encodePrivate(pair.getPrivate()));
 
-        kv.put(properties.path(), Map.of("keys", List.of(entry)));
-        return entry;
+        try {
+            versionedKv.put(properties.path(),
+                    Versioned.create(Map.of("keys", List.of(entry)), Versioned.Version.unversioned()));
+            log.info("bootstrapped signing key kid={}", entry.get("kid"));
+        } catch (VaultException e) {
+            // Another instance created the key first. Its key is the real one.
+            log.info("another instance bootstrapped the signing key first; adopting it");
+        }
     }
 }

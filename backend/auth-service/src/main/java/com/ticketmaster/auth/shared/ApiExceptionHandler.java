@@ -2,6 +2,7 @@ package com.ticketmaster.auth.shared;
 
 import com.ticketmaster.auth.login.InvalidCredentialsException;
 import com.ticketmaster.auth.registration.EmailAlreadyRegisteredException;
+import com.ticketmaster.auth.token.InvalidRefreshTokenException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -56,6 +57,20 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(InvalidCredentialsException.class)
     public ProblemDetail handleInvalidCredentials(InvalidCredentialsException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+        problem.setTitle("Invalid credentials");
+        return problem;
+    }
+
+    /**
+     * One 401 for every refresh failure - unknown, expired, revoked, replayed.
+     *
+     * The exception carries a reason for the logs; the response carries none.
+     * "Reuse detected" would tell an attacker their stolen token was noticed,
+     * and "expired" rather than "unknown" would confirm the token was real.
+     */
+    @ExceptionHandler(InvalidRefreshTokenException.class)
+    public ProblemDetail handleInvalidRefreshToken(InvalidRefreshTokenException e) {
         ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
         problem.setTitle("Invalid credentials");
         return problem;

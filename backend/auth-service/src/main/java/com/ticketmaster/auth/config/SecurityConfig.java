@@ -62,6 +62,12 @@ public class SecurityConfig {
                         // each guess expensive for the attacker AND for us,
                         // which is exactly why the throttle is not optional.
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
+
+                        // Permitted because the refresh COOKIE is the
+                        // credential, not an Authorization header - the whole
+                        // point is that it works when the access token has
+                        // already expired.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/refresh").permitAll()
                         // ADR-032: probes must answer without credentials,
                         // or a healthy pod looks unhealthy to Kubernetes.
                         .requestMatchers("/actuator/health/**").permitAll()
