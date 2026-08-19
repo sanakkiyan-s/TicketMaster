@@ -1073,3 +1073,76 @@ notification design discussed earlier (KodeKloud FCM/pub-sub comparison).
   The workable shapes are a Kubernetes CronJob (one pod by construction),
   leader election, or an admin-triggered endpoint - with CAS underneath all
   three. The CronJob option is blocked on the manifest-delivery Open Decision.
+
+## 2026-08-19 (api-gateway: routing + JWKS validation at the edge)
+
+### Added
+- `api-gateway` gets its first source: `GatewayApplication`, `jwt/JwksCache`,
+  `jwt/JwtAuthenticationFilter`, `jwt/JwtValidationProperties`,
+  `jwt/JwksHealthIndicator`, plus `application.yml` carrying the routing table.
+- `JwtAuthenticationFilterTest` - 10 tests.
+
+### Notes
+- **The JWKS cache has no on-demand fetch method at all.** Not an oversight:
+  the obvious design - fetch whenever an unknown `kid` arrives - is an
+  amplification vector, because an attacker sending garbage `kid` values turns
+  unauthenticated traffic into outbound load on auth-service from every
+  gateway instance at once, exactly when auth-service can least absorb it
+  (ADR-012). Two tests pin this, including one that fires 200 forged kids and
+  asserts the fetch count is still zero. Verified live as well: a forged kid
+  through the running gateway returned 401 with the fetch count unchanged.
+- ADR-012 also describes an emergency backstop (one out-of-band refetch per
+  60s, only when the unknown kid is seen from multiple distinct sources).
+  NOT implemented - the stricter subset (never fetch lazily) is what shipped.
+  It only degrades availability during an already-botched rotation, never
+  security.
+- **503, not 401, while JWKS has never loaded.** A 401 tells a client with a
+  perfectly good token to discard it and re-login, turning one gateway's cold
+  start into a login stampede against auth-service.
+- The Authorization header is **forwarded unchanged**, not stripped in favour
+  of a trusted `X-User-Id`. That pattern is only safe when downstream services
+  are unreachable except through the gateway; on a flat network any workload
+  could set the header and become any user. ADR-009's mesh mTLS is the
+  prerequisite and is not in place.
+- Global filters only run AFTER a route matches, so an unrouted path 404s
+  without reaching the filter. Not a hole - nothing is proxied - but it means
+  "no token -> 401" is only observable on a routed path.
+
+### Fixed (all five found by actually running it, none by tests)
+- **Spring Cloud Gateway 4.1.5 is incompatible with Boot 3.5.6.** Startup
+  fails with an explicit compatibility check naming the release train. Bumped
+  to 4.3.0 (the 2025.0 train).
+- **gRPC on the gateway broke startup**: `NoClassDefFoundError
+  io/grpc/netty/NettyChannelBuilder`. Spring Cloud Gateway sees `io.grpc` on
+  the classpath, activates its JsonToGrpc filter, then dies because the netty
+  transport is absent. This is the long-standing "gRPC deps on all 15 modules"
+  debt finally causing a concrete failure. Excluded from api-gateway, which
+  proxies HTTP and holds no stubs.
+- **JWKS cold start left the gateway dead for a full refresh interval.** The
+  initial fetch got "connection refused" when the gateway won the race against
+  auth-service, and the steady-state timer does not return for 5 minutes.
+  Added a 5-second retry that runs only until the first successful load.
+  Verified by deliberately starting the gateway FIRST: 6 failed attempts, then
+  ready.
+- **auth-service defaulted to Postgres 5432** while compose now publishes
+  5433 (moved to dodge a native install). Every `bootRun` failed. Same fix
+  applied to `scripts/dev.sh`, which was checking the wrong port.
+- **Unused Redis starter on auth-service** pointed at 6379 and made
+  `/actuator/health` report DOWN. Removed - ADR-012 puts refresh tokens in
+  Postgres, so auth-service has no Redis use. The gateway keeps Redis (ADR-014
+  rate limiting) and now configures port 6380.
+- Readiness includes the `jwks` indicator; liveness deliberately does not.
+  A gateway that cannot reach auth-service is not broken, and restarting it
+  would turn someone else's outage into a crash loop of our own (ADR-032).
+
+### Verified end to end (live, not just tests)
+Through the gateway on :8080 - register 201, login 200, refresh via the
+httpOnly cookie 200, wrong password 401, no token 401, forged kid 401, valid
+token proxied through to auth-service.
+
+### Still open
+- Revocation consumer: NOT built. Blocked on the `auth.revocation` producer,
+  which ADR-012 routes through ADR-007's transactional outbox - and no outbox
+  table or Debezium connector exists yet. Until then a revoked refresh family
+  does not invalidate already-issued access tokens for up to 10 minutes.
+- Rate limiting (ADR-014) not wired, though the Redis dependency is present.

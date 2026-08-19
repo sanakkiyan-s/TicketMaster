@@ -1,0 +1,76 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      # 6380, not the default 6379: infra/docker-compose.yml publishes Redis
+      # there to avoid colliding with a local install. Left at the default the
+      # health indicator reports DOWN and the readiness probe fails, so the
+      # gateway never takes traffic - with nothing in the log explaining why.
+      port: ${REDIS_PORT:6380}
+
+  cloud:
+    gateway:
+      routes:
+        # The routing table lives in YAML, not a Java DSL (see
+        # wiki/projects/api-gateway.md): it ships as a ConfigMap per ADR-033
+        # and can be retuned without a rebuild. Java owns filter BEHAVIOUR;
+        # YAML owns which path goes where.
+        - id: auth-service
+          uri: ${AUTH_SERVICE_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+          # No rewrite filter, deliberately: auth-service serves the same
+          # /api/v1 prefix it is reached by, so a path in a log means the same
+          # thing on both sides of the gateway.
+
+      httpclient:
+        connect-timeout: 2000
+        response-timeout: 10s
+
+gateway:
+  jwt:
+    jwks-uri: ${JWKS_URI:http://localhost:8081/.well-known/jwks.json}
+    issuer: ${JWT_ISSUER:http://localhost:8081}
+    audience: ${JWT_AUDIENCE:ticketmaster-api}
+
+    # ADR-012 fixes this at 5 minutes and derives the rotation phase length
+    # from it. Raising it silently lengthens the window in which a rotation can
+    # strand this instance with a key set that no longer signs anything.
+    refresh-interval: PT5M
+
+    # Deliberately small. Skew tolerance is added directly to the life of every
+    # expired token, so generosity here quietly extends the 10-minute window.
+    clock-skew: PT30S
+
+    unknown-kid-ttl: PT60S
+
+    # The endpoints where credentials are exchanged cannot themselves require a
+    # credential. Everything not listed here needs a valid token.
+    public-paths:
+      - /api/v1/auth/register
+      - /api/v1/auth/login
+      - /api/v1/auth/refresh
+      - /actuator/health
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      # readiness only. Adding jwks to liveness would make Kubernetes restart
+      # a gateway that is working perfectly and simply cannot reach
+      # auth-service - turning someone else's outage into a crash loop of our
+      # own (ADR-032).
+      group:
+        readiness:
+          include: readinessState,jwks
