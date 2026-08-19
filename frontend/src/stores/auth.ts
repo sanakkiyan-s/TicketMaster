@@ -10,7 +10,13 @@ export interface User {
 interface AuthState {
   accessToken: string | null;
   user: User | null;
-  setSession: (accessToken: string, user: User) => void;
+  /**
+   * `user` is nullable here because silent refresh (see
+   * features/auth/useSilentRefresh.ts) can only supply an accessToken —
+   * RefreshResponse carries no user object, unlike LoginResponse. Callers
+   * that only have a token pass `null` rather than fabricate a User.
+   */
+  setSession: (accessToken: string, user: User | null) => void;
   clearSession: () => void;
 }
 

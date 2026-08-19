@@ -2,9 +2,9 @@
 title: frontend
 type: project
 sources: []
-related: [[system-overview]], [[api-gateway]], [[queue-service]]
+related: [[system-overview]], [[api-gateway]], [[auth-service]], [[queue-service]]
 created: 2026-08-05
-last-updated: 2026-08-14
+last-updated: 2026-08-19
 ---
 
 ## Purpose
@@ -39,8 +39,48 @@ Styling layer wired 2026-08-14:
 `dist/assets/index-*.css` (21.3 kB / 4.6 kB gzipped) — a static
 stylesheet, which is the concrete form of the CSP argument below.
 
-Application source is still `src/main.tsx` + `src/lib/gateway.ts`. No
-stores, no routes, no pages yet.
+**Auth flow implemented** (predates this note; login/register landed
+2026-08-1x, silent refresh/logout/testing infra added 2026-08-19 — this
+page previously said "no stores, no routes, no pages yet," which was
+already wrong before today's addition, not just after it):
+
+- `stores/auth.ts` — `authStore`, in-memory only (no `localStorage`/
+  `sessionStorage`/zustand `persist`), matching the Target Design's own
+  stated split and this session's XSS-vs-reload tradeoff, documented in
+  the file itself.
+- `features/auth/` — `LoginPage`, `RegisterPage`, `AuthShell`,
+  `ProtectedRoute` (UX-only redirect gate, not a security boundary — the
+  API enforces regardless), `useAuthMutations.ts` (`useLogin`,
+  `useRegister`, `useLogout`), `useSilentRefresh.ts` (calls
+  `POST /api/v1/auth/refresh` once on app load via the httpOnly cookie;
+  `user` stays `null` after a silent refresh rather than decoding JWT
+  claims client-side — `RefreshResponse` carries no email field to
+  populate it with, and every consumer already tolerates a null user).
+- `main.tsx` — `SessionGate` wraps the router, runs silent refresh before
+  any route renders so `ProtectedRoute`'s redirect decision sees
+  post-refresh state.
+- Login form distinguishes 429 (rate-limited) from 401 with its own
+  message; 401 stays the SAME generic message for unknown-email,
+  wrong-password, AND locked-account — deliberately, matching
+  auth-service's `InvalidCredentialsException` anti-enumeration design
+  (see [[auth-service]]). Do not add a distinct "account locked" UI
+  message without first re-reading why that file treats all three as one
+  response.
+- `logout` calls `POST /api/v1/auth/logout` and clears local session
+  state in `onSettled`, not `onSuccess` — a failed/missing logout call
+  must never leave the UI stuck showing "logged in".
+- Test infrastructure added from scratch 2026-08-19 (none existed
+  before): `vitest.config.ts` (jsdom environment), `src/test/setup.ts`
+  (jest-dom + explicit RTL `cleanup()` — without `test.globals: true`,
+  RTL's auto-cleanup never registers and tests leak DOM state into each
+  other). 7 tests across 3 files, all passing as of 2026-08-19.
+- `lib/gateway.ts` still exists as the pre-auth scaffold entry point
+  mentioned below; `lib/api.ts` is the actual HTTP client the auth
+  feature uses (`apiPost`, `ApiError`/`ProblemDetail` types matching
+  auth-service's RFC 9457 shape).
+
+Everything else in this page's original scaffold description below still
+holds — Tailwind/shadcn wiring, CSP posture, build/typecheck status.
 
 ## Target Design
 
@@ -110,8 +150,14 @@ stores, no routes, no pages yet.
 
 ## Gap
 
-Everything except the build/tooling/styling scaffold. No routes, stores,
-pages, seat map, or API integration beyond `src/lib/gateway.ts`.
+Auth flow (login/register/refresh/logout) is built — see above. Still
+nothing beyond that: no event browsing/search, no seat map, no queue UI,
+no checkout, no ticket display, no account/history pages. `seatStore`,
+`queueStore`, `checkoutStore` from Target Design don't exist yet — only
+`authStore` does. No admin-facing UI either (banning users, triggering
+key rotation are ADMIN-only backend operations with no frontend surface
+by design, not an oversight — see [[auth-service]]'s rotation/revocation
+work).
 
 ## Open Questions
 

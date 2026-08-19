@@ -57,7 +57,7 @@ concretely why — cite the ADR you'd supersede.
 | `backend/fraud-service` | Risk scoring, bot detection, velocity/bulk-limit checks | not started |
 | `backend/analytics-service` | Organizer sales dashboards, reporting (async) | not started |
 | `backend/media-service` | Object storage, video trailer upload + FFmpeg transcoding | not started |
-| `frontend` | React/TypeScript client | not started |
+| `frontend` | React/TypeScript client | in progress — see [[frontend]] |
 | `infra` | Docker Compose, CI/CD, deployment config | not started |
 
 See `second-brain/wiki/projects/` for the detailed page per repo, and
