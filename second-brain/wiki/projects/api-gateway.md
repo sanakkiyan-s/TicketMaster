@@ -14,8 +14,35 @@ services, validates auth tokens at the edge, applies rate limiting.
 
 ## Current Implementation
 
-Not started. `backend/api-gateway` holds only `build.gradle.kts` — no
-`application.yml`, no filter beans, no routes (verified 2026-08-14).
+**Wrong as of 2026-08-19: this said "Not started" while
+`JwtAuthenticationFilter`, routing, rate limiting, and a Kafka revocation
+consumer all already existed.** Verified against `backend/api-gateway/src/`:
+
+- `jwt/JwtAuthenticationFilter` — local JWKS-cached signature validation,
+  then (post-signature) the revocation check below. Rejects with one
+  consistent 401 shape for every JWT failure — bad signature, expired,
+  unknown kid, and revoked all look identical to the caller.
+- `jwt/JwksCache` — background-refreshed public-key cache; the unknown-kid
+  emergency-refetch backstop from [[ADR-012-jwt-lifecycle]].
+- `jwt/revocation/` — `RevocationConsumer` (raw `KafkaConsumer` on its own
+  thread, `assign()`+`seekToBeginning`+`endOffsets` comparison to
+  precisely detect startup catch-up rather than approximate it),
+  `RevocationStore` (the in-memory map), `RevocationCleanupScheduler`
+  (TTL tombstoning), `RevocationHealthIndicator` (readiness fails closed
+  until caught up — [[ADR-012-jwt-lifecycle]]'s named exception to this
+  project's usual fail-open convention; a later mid-flight Kafka
+  disconnect does NOT flip readiness back down, it logs and keeps serving
+  the last-known map). Single-region only — ADR-012's cross-region
+  MirrorMaker amendment is not built.
+- `ratelimit/RateLimitConfig` — the `ipKeyResolver` bean backing
+  route-level `RequestRateLimiter` filters on login/register (see below).
+- `application.yml` — routes for auth-service (including the
+  login/register-specific rate-limited routes), Kafka bootstrap config,
+  readiness probe group including both `jwks` and `revocation`.
+
+**Verification status**: `./gradlew :backend:api-gateway:test` green as
+of 2026-08-19 (24 tests spanning filter, rate-limit-store, and
+Kafka-Testcontainers revocation suites).
 
 ## Target Design
 
@@ -110,4 +137,10 @@ Responsibilities:
 
 ## Gap
 
-Everything.
+Also wrong until 2026-08-19 (see above). Real remaining gaps: routing
+only covers auth-service so far, not the other 13 backend services (none
+of them have code yet, so nothing to route to). Circuit breakers
+(Resilience4j) mentioned in Responsibilities above are not implemented.
+Cross-region revocation mirroring (ADR-012's amendment) is single-region
+only for now. CORS handling not yet configured. Correlation-ID injection
+not yet implemented.

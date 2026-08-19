@@ -93,14 +93,34 @@ ADR-036 Phase 1). Verified against `backend/auth-service/src/`:
   **What's still actually missing**: nothing calls Vault by default in any
   environment (`key-source` defaults to `ephemeral` everywhere including
   presumably production config, which is itself worth double-checking
-  before a real deploy), and ADR-012's four-phase rotation state machine —
-  the thing that would ever move a key from PUBLISHED to SIGNING to
-  RETIRED — has no orchestrator. `KeyStatus` (the enum) exists; nothing
-  drives transitions between its values yet. Confirmed absent from
-  `backend/auth-service/src/main/java/.../jwt/` as of 2026-08-19: no
-  rotation-phase class, and no `auth.revocation` Kafka producer either
-  (the gateway-side consumer exists, nothing publishes to the topic it
-  reads).
+  before a real deploy). The rotation state machine itself — **update,
+  later the same day (2026-08-19): built.** See the Rotation & revocation
+  bullet below.
+
+- **Rotation & revocation (ADR-012), built 2026-08-19.** `jwt/rotation/`:
+  `RotationState`/`RotationStateRepository` (Postgres-persisted phase +
+  timestamps, survives restarts), `RotationOrchestrator` (drives Vault
+  key status through PUBLISHED -> SIGNING -> RETIRED),
+  `RotationScheduler` (advances a phase once its configured minimum
+  duration elapses), `RotationAdminController` (ADMIN-only
+  start/compromise-skip-to-RETIRE). `shared/outbox/`:
+  `OutboxEvent`/`OutboxEventRepository` (ADR-007's schema),
+  `RevocationPublisher` (`Propagation.MANDATORY` — deliberately refuses
+  to open its own transaction, since that would defeat the outbox
+  pattern's entire guarantee). `revocation/`: `LogoutController`
+  (`/logout` session-scoped, `/logout-everywhere` user-scoped, both
+  self-service), `AdminUserController` (`/admin/users/{id}/ban`,
+  ADMIN-only, audited via `shared/AdminActionAuditLogger`). All four
+  endpoints authenticate via the new `jwt/TokenVerifier` — real signature
+  verification against this service's own keys, not the
+  unverified-decode shortcut a downstream consumer like user-service
+  uses, since auth-service actually holds the key material and has no
+  excuse not to check it properly. **Not built**: the Kafka
+  Connect/Debezium connector registration that bridges the `outbox`
+  table to Kafka — a deployment/infra config step, not application code.
+  Outbox rows are written correctly but nothing ships them to
+  `auth.revocation` yet; [[api-gateway]]'s consumer side is built and
+  tested but has nothing to consume until that connector exists.
 - `AuthApplicationTest` — Testcontainers Postgres, ADR-008's integration
   tier. Asserts the schema Flyway produced and that CITEXT really makes
   email comparison case-insensitive.
@@ -163,12 +183,29 @@ Everything except the above. Login itself is now implemented (see
 `login/` above) — this entry was stale from 2026-08-14 until 2026-08-19.
 ADR-010's Vault-backed key source is also implemented (see the corrected
 Signing keys bullet above) — this Gap list previously said otherwise,
-also wrong, also corrected 2026-08-19. Still genuinely not implemented:
-ADR-012's four-phase key rotation orchestrator (no code drives a key
-through PUBLISHED -> SIGNING -> RETIRED), the `auth.revocation` producer,
-and Citus distribution by `user_id` (ADR-018 — deferred to a later
-migration since a single-node dev Postgres has nothing to distribute
-across).
+also wrong, also corrected 2026-08-19.
+
+**Also now implemented, 2026-08-19**: ADR-012's four-phase key rotation
+orchestrator (`jwt/rotation/` — `RotationOrchestrator`,
+`RotationScheduler`, admin-triggered start/compromise endpoints) and the
+`auth.revocation` producer (`shared/outbox/RevocationPublisher`, ADR-007's
+transactional-outbox pattern; `revocation/` package's `/logout`,
+`/logout-everywhere`, `/admin/users/{id}/ban`). Both verify bearer tokens
+via the new `jwt/TokenVerifier` — real signature checking against this
+service's own `SigningKeyProvider`, not an unverified decode, since this
+service (unlike a downstream consumer) actually holds the key material.
+**Not built**: the Kafka Connect/Debezium connector registration that
+actually bridges the `outbox` table to Kafka — that's a deployment/infra
+config step, not application code, and remains outstanding. Without it,
+outbox rows are written correctly but nothing ships them to the
+`auth.revocation` topic yet; see [[api-gateway]] for the consumer side,
+which is built and tested but has nothing to consume until the connector
+exists.
+
+Still genuinely not implemented: cross-region rotation/revocation
+concerns (single-region only), and Citus distribution by `user_id`
+(ADR-018 — deferred to a later migration since a single-node dev
+Postgres has nothing to distribute across).
 
 **Note for future sessions**: the `/refresh` endpoint and the JWT gateway
 edge routing mentioned in this repo's recent git history
