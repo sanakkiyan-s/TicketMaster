@@ -115,12 +115,22 @@ ADR-036 Phase 1). Verified against `backend/auth-service/src/`:
   verification against this service's own keys, not the
   unverified-decode shortcut a downstream consumer like user-service
   uses, since auth-service actually holds the key material and has no
-  excuse not to check it properly. **Not built**: the Kafka
-  Connect/Debezium connector registration that bridges the `outbox`
-  table to Kafka — a deployment/infra config step, not application code.
-  Outbox rows are written correctly but nothing ships them to
-  `auth.revocation` yet; [[api-gateway]]'s consumer side is built and
-  tested but has nothing to consume until that connector exists.
+  excuse not to check it properly. The Kafka Connect/Debezium connector
+  that bridges the `outbox` table to `auth.revocation` is now specified
+  at `infra/kafka-connect/auth-outbox-connector.json` (Debezium
+  `EventRouter` SMT, `route.by.field=event_type` — since `event_type`'s
+  value is already the literal topic name, `${routedByValue}` needs no
+  rewrite; `table.field.event.key=aggregate_id` so the Kafka record key
+  is the revocation scope `RevocationConsumer` expects) plus
+  `infra/kafka-connect/register-auth-outbox-connector.sh` to POST it to
+  Connect's REST API — Connect has no "load at boot" mechanism, so this
+  is a deliberate manual/CI step, not automatic on `docker compose up`.
+  Registering it (and the `wal_level=logical` change on
+  `postgres-coordinator` it depends on, both landed 2026-08-19) still
+  requires actually running the stack, which has not been done in this
+  session — see [[api-gateway]]'s consumer side, built and tested but
+  with nothing flowing to it until someone runs that script against a
+  live compose stack.
 - `AuthApplicationTest` — Testcontainers Postgres, ADR-008's integration
   tier. Asserts the schema Flyway produced and that CITEXT really makes
   email comparison case-insensitive.
@@ -194,13 +204,16 @@ transactional-outbox pattern; `revocation/` package's `/logout`,
 via the new `jwt/TokenVerifier` — real signature checking against this
 service's own `SigningKeyProvider`, not an unverified decode, since this
 service (unlike a downstream consumer) actually holds the key material.
-**Not built**: the Kafka Connect/Debezium connector registration that
-actually bridges the `outbox` table to Kafka — that's a deployment/infra
-config step, not application code, and remains outstanding. Without it,
-outbox rows are written correctly but nothing ships them to the
-`auth.revocation` topic yet; see [[api-gateway]] for the consumer side,
-which is built and tested but has nothing to consume until the connector
-exists.
+**Specified but not registered, 2026-08-19**: the Kafka Connect/Debezium
+connector config that bridges the `outbox` table to `auth.revocation`
+(`infra/kafka-connect/auth-outbox-connector.json` +
+`register-auth-outbox-connector.sh`) and the `wal_level=logical` change
+on `postgres-coordinator` it needs. Registering it against a live compose
+stack — running `docker compose up` and then the registration script —
+has not happened in this session. Until it does, outbox rows are written
+correctly but nothing ships them to the `auth.revocation` topic; see
+[[api-gateway]] for the consumer side, which is built and tested but has
+nothing to consume until then.
 
 Still genuinely not implemented: cross-region rotation/revocation
 concerns (single-region only), and Citus distribution by `user_id`

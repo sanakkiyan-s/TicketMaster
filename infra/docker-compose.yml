@@ -8,6 +8,12 @@ services:
   # --- Postgres / Citus (ADR-005) ---------------------------------
   postgres-coordinator:
     image: citusdata/citus:12.1
+    # wal_level=logical is required by Debezium's Postgres connector
+    # (ADR-007) - it reads a logical replication slot off the WAL, which
+    # does not exist at the default wal_level=replica. Only the
+    # coordinator needs it: the outbox table Debezium tails lives there,
+    # not on the workers.
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-ticketmaster}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketmaster}
@@ -118,6 +124,17 @@ services:
       VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      # Worker-level defaults above stay Avro for connectors that want
+      # schema-registry-backed serde. auth-outbox-connector.json overrides
+      # both to plain string/JSON per-connector (RevocationConsumer is a
+      # raw KafkaConsumer<String,String>, not Avro-aware) - that override
+      # only resolves if the worker exposes a config provider for the
+      # ${env:...} DB credential placeholders used in that file.
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      POSTGRES_USER: ${POSTGRES_USER:-ticketmaster}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketmaster}
+      POSTGRES_DB: ${POSTGRES_DB:-ticketmaster}
     ports:
       - "8083:8083"
     depends_on:

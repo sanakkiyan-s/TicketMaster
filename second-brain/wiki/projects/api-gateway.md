@@ -33,7 +33,11 @@ consumer all already existed.** Verified against `backend/api-gateway/src/`:
   project's usual fail-open convention; a later mid-flight Kafka
   disconnect does NOT flip readiness back down, it logs and keeps serving
   the last-known map). Single-region only — ADR-012's cross-region
-  MirrorMaker amendment is not built.
+  MirrorMaker amendment is not built. **Nothing flows to this consumer
+  yet**: the Kafka Connect/Debezium connector that ships auth-service's
+  outbox rows onto `auth.revocation` is specified
+  (`infra/kafka-connect/auth-outbox-connector.json`) but not registered
+  against a running stack — see [[auth-service]].
 - `ratelimit/RateLimitConfig` — the `ipKeyResolver` bean backing
   route-level `RequestRateLimiter` filters on login/register (see below).
 - `application.yml` — routes for auth-service (including the
