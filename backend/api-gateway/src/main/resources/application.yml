@@ -90,6 +90,14 @@ spring:
           # No rewrite filter, deliberately: auth-service serves the same
           # /api/v1 prefix it is reached by, so a path in a log means the same
           # thing on both sides of the gateway.
+        - id: user-service
+          uri: ${USER_SERVICE_URI:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/users/**
+          # No rate limiter: unlike login/register, every route here requires
+          # a valid access token first (not in gateway.jwt.public-paths, see
+          # below), so there is no unauthenticated brute-force surface to
+          # shield.
 
       httpclient:
         connect-timeout: 2000

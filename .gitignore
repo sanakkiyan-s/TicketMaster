@@ -19,6 +19,9 @@ bin/
 .project
 .settings/
 
+# Claude Code local tool state - not project source.
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db

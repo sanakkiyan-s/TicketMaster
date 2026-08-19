@@ -221,6 +221,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       AUTH_SERVICE_URI: http://auth-service:8081
       JWKS_URI: http://auth-service:8081/.well-known/jwks.json
+      USER_SERVICE_URI: http://user-service:8082
     ports:
       - "8080:8080"
     depends_on:
@@ -229,6 +230,8 @@ services:
       kafka:
         condition: service_started
       auth-service:
+        condition: service_healthy
+      user-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]

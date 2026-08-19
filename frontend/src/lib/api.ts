@@ -39,20 +39,7 @@ export function setAuthHeader(token: string | null): void {
   authHeader = token ? `Bearer ${token}` : null;
 }
 
-export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(authHeader ? { Authorization: authHeader } : {}),
-    },
-    // Required for the refresh_token cookie to be set and returned. The cookie
-    // is httpOnly, so this is the only way it participates at all — JS cannot
-    // read or attach it manually, which is the entire point.
-    credentials: "include",
-    body: JSON.stringify(body),
-  });
-
+async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     // A gateway 502 or a network-level failure has no ProblemDetail body, so
     // parsing must not be allowed to mask the real status.
@@ -68,4 +55,41 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   // 204 and friends have no body; JSON.parse("") throws.
   const text = await response.text();
   return (text ? JSON.parse(text) : null) as T;
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  const response = await fetch(path, {
+    headers: authHeader ? { Authorization: authHeader } : {},
+    credentials: "include",
+  });
+  return handleResponse<T>(response);
+}
+
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(authHeader ? { Authorization: authHeader } : {}),
+    },
+    // Required for the refresh_token cookie to be set and returned. The cookie
+    // is httpOnly, so this is the only way it participates at all — JS cannot
+    // read or attach it manually, which is the entire point.
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  return handleResponse<T>(response);
+}
+
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(authHeader ? { Authorization: authHeader } : {}),
+    },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  return handleResponse<T>(response);
 }

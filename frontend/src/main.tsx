@@ -2,15 +2,12 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-dom";
-import { Loader2 } from "lucide-react";
+import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { RegisterPage } from "@/features/auth/RegisterPage";
-import { ProtectedRoute } from "@/features/auth/ProtectedRoute";
-import { useLogout } from "@/features/auth/useAuthMutations";
 import { useSilentRefresh } from "@/features/auth/useSilentRefresh";
+import { HomePage } from "@/features/home/HomePage";
 import { useAuthStore } from "@/stores/auth";
 
 const queryClient = new QueryClient({
@@ -26,7 +23,17 @@ const queryClient = new QueryClient({
   },
 });
 
-function Placeholder() {
+/**
+ * "/" is one route with two faces: HomePage once signed in, a plain landing
+ * otherwise. No ProtectedRoute redirect dance needed for the root — signing
+ * out just swaps which face renders, in place.
+ */
+function Root() {
+  const accessToken = useAuthStore((state) => state.accessToken);
+  return accessToken ? <HomePage /> : <Landing />;
+}
+
+function Landing() {
   return (
     <main className="auth-backdrop mx-auto flex min-h-dvh max-w-2xl flex-col items-start justify-center gap-4 px-6">
       <h1 className="text-3xl font-semibold tracking-tight">TicketMaster</h1>
@@ -42,47 +49,6 @@ function Placeholder() {
           Create account
         </Link>
       </p>
-    </main>
-  );
-}
-
-/**
- * Placeholder for the first authenticated surface.
- *
- * This is also, for now, the only reachable place to host a sign-out
- * control — the app doesn't have a real authenticated shell/nav yet, and
- * building one is out of scope for wiring up logout.
- */
-function Account() {
-  const navigate = useNavigate();
-  const user = useAuthStore((state) => state.user);
-  const logout = useLogout(() => navigate("/login", { replace: true }));
-
-  return (
-    <main className="auth-backdrop mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-4 px-6">
-      <h1 className="text-3xl font-semibold tracking-tight">Your account</h1>
-      <p className="text-muted-foreground">
-        {/* user can be null here — e.g. session recovered via silent refresh,
-            which gets an access token back but no user object. */}
-        {user ? `Signed in as ${user.email}.` : "Signed in."} Tickets and
-        transfers arrive with ticket-service.
-      </p>
-      <Button
-        type="button"
-        variant="outline"
-        className="w-fit"
-        disabled={logout.isPending}
-        onClick={() => logout.mutate()}
-      >
-        {logout.isPending ? (
-          <>
-            <Loader2 aria-hidden="true" className="animate-spin" />
-            Signing out…
-          </>
-        ) : (
-          "Sign out"
-        )}
-      </Button>
     </main>
   );
 }
@@ -113,14 +79,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <BrowserRouter>
         <SessionGate>
           <Routes>
-            <Route path="/" element={<Placeholder />} />
+            <Route path="/" element={<Root />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
-
-            {/* Everything nested here requires a session. */}
-            <Route element={<ProtectedRoute />}>
-              <Route path="/account" element={<Account />} />
-            </Route>
           </Routes>
         </SessionGate>
       </BrowserRouter>
