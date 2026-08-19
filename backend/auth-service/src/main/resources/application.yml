@@ -45,11 +45,17 @@ auth:
     # - a shared IP (NAT/corporate/library) must never cost a legitimate
     # user their own login budget, which is exactly what an IP-only limit
     # would do.
-    redis-max-attempts: 5
-    redis-window: PT1M
-    # Persistent backstop for an attacker who paces guesses just under the
-    # Redis window's rate to avoid it - see User.recordFailedLogin.
-    lock-threshold: 10
+    #
+    # Two-window Redis design (ADR-040), replacing a DB-persisted counter
+    # that never decayed.
+    fast-window-limit: 5
+    fast-window-ttl: PT1M
+    # Catches an attacker who paces guesses just under the fast window's
+    # rate to avoid it - self-decaying via TTL, unlike the old
+    # failed_login_attempts column, so a legitimate user's occasional
+    # mistypes days apart no longer accumulate toward a lock forever.
+    slow-window-limit: 15
+    slow-window-ttl: PT24H
     lock-duration: PT15M
 
 

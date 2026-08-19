@@ -2,7 +2,7 @@
 title: auth-service
 type: project
 sources: []
-related: [[system-overview]], [[user-service]], [[api-gateway]], [[ADR-012-jwt-lifecycle]], [[ADR-036-build-order-and-phasing]], [[ADR-039-dual-tier-login-rate-limiting]]
+related: [[system-overview]], [[user-service]], [[api-gateway]], [[ADR-012-jwt-lifecycle]], [[ADR-036-build-order-and-phasing]], [[ADR-039-dual-tier-login-rate-limiting]], [[ADR-040-login-attempt-decay]]
 created: 2026-08-05
 last-updated: 2026-08-19
 ---
@@ -66,14 +66,17 @@ ADR-036 Phase 1). Verified against `backend/auth-service/src/`:
   (credential verification: dummy-hash BCrypt burn on unknown email,
   identical `InvalidCredentialsException` for unknown-email/wrong-password/
   locked-account so none is distinguishable from another by response or
-  timing). `LoginAttemptLimiter` (Redis, atomic `login_attempt.lua`) and
-  `User.failedLoginAttempts`/`lockedUntil` (V2 migration) implement the
-  account-abuse layer of [[ADR-039-dual-tier-login-rate-limiting]] — 5
-  failed attempts/min per email trips a 429
-  (`TooManyLoginAttemptsException`), 10 failures locks the account 15
-  minutes. Both fail open on a Redis outage. This closes what was, until
-  2026-08-19, this page's own stale "login itself... credential
-  verification does not [exist]" Gap entry below.
+  timing). `LoginAttemptLimiter` implements the account-abuse layer of
+  [[ADR-039-dual-tier-login-rate-limiting]] with [[ADR-040-login-attempt-decay]]'s
+  two-window Redis design (`login_attempt_windows.lua`, one atomic script):
+  5 failed attempts/min per email trips a 429
+  (`TooManyLoginAttemptsException`), 15 failures/24h (self-decaying, not
+  the old DB counter that never did) locks the account 15 minutes via
+  `User.lockedUntil` alone — `User.failedLoginAttempts` and its V2 column
+  are gone (`V5__drop_failed_login_counter.sql`). Both windows fail open
+  on a Redis outage. This closes what was, until 2026-08-19, this page's
+  own stale "login itself... credential verification does not [exist]"
+  Gap entry below.
 - **Signing keys: both providers exist, ephemeral is just the default.**
   This page previously said Vault-backed keys were unimplemented — wrong,
   corrected 2026-08-19 after actually reading the code rather than trusting

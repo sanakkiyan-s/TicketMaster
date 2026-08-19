@@ -24,11 +24,12 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for the new lockout wiring in LoginService: Redis-limiter
- * short-circuit, DB-persisted lock threshold, and counter reset on
+ * Unit tests for LoginService's lockout wiring (ADR-040): Redis-limiter
+ * short-circuit, the DB-persisted lock triggered only when
+ * LoginAttemptLimiter.recordFailure reports a trip, and counter reset on
  * success. Real User instances are used rather than mocks - User's own
- * recordFailedLogin/isLocked/resetFailedLogins behaviour is exactly what
- * this wiring depends on, so faking it would test nothing.
+ * lock/isLocked/unlock behaviour is exactly what this wiring depends on,
+ * so faking it would test nothing.
  */
 class LoginServiceTest {
 
@@ -36,8 +37,8 @@ class LoginServiceTest {
     private static final String PASSWORD = "correct-horse-battery";
     private static final String HASH = "hashed-password";
 
-    private static final LoginSecurityProperties SECURITY =
-            new LoginSecurityProperties(5, Duration.ofMinutes(1), 10, Duration.ofMinutes(15));
+    private static final LoginSecurityProperties SECURITY = new LoginSecurityProperties(
+            5, Duration.ofMinutes(1), 15, Duration.ofHours(24), Duration.ofMinutes(15));
 
     private UserRepository users;
     private PasswordEncoder passwordEncoder;
@@ -54,9 +55,9 @@ class LoginServiceTest {
 
     @Test
     void redisLimiterTripsBeforeTheDatabaseIsEverTouched() {
-        // The 5th-failure case: isBlocked() is checked first specifically
-        // so an already-over-budget username doesn't cost a lookup or a
-        // BCrypt call.
+        // The already-over-budget case: isBlocked() is checked first
+        // specifically so an already-over-budget username doesn't cost a
+        // lookup or a BCrypt call.
         when(attemptLimiter.isBlocked(EMAIL)).thenReturn(true);
 
         assertThrows(TooManyLoginAttemptsException.class,
@@ -67,40 +68,35 @@ class LoginServiceTest {
     }
 
     @Test
-    void wrongPasswordRecordsAFailureAgainstBothCounters() {
+    void wrongPasswordRecordsAFailureButDoesNotLockBelowTheThreshold() {
         User user = new User(EMAIL, HASH, Instant.now());
         when(attemptLimiter.isBlocked(EMAIL)).thenReturn(false);
         when(users.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(PASSWORD, HASH)).thenReturn(false);
+        when(attemptLimiter.recordFailure(EMAIL)).thenReturn(false);
 
         assertThrows(InvalidCredentialsException.class,
                 () -> loginService.authenticate(EMAIL, PASSWORD));
 
-        assertEquals(1, user.getFailedLoginAttempts());
+        assertFalse(user.isLocked(Instant.now()));
         verify(attemptLimiter).recordFailure(EMAIL);
     }
 
     @Test
-    void the10thFailureTripsTheDatabaseLockEvenIfRedisWouldHaveAllowedIt() {
-        // Redis forgets a failure once its window expires; the DB
-        // backstop must not, so it is exercised here with the Redis
-        // limiter stubbed to always allow through - exactly the attacker
-        // who paces guesses to dodge the Redis window.
+    void theAttemptThatTripsEitherRedisWindowLocksTheAccountInTheDatabase() {
+        // recordFailure reporting true is LoginAttemptLimiter's signal
+        // that THIS attempt crossed a threshold (fast or slow window) -
+        // LoginService must write the DB lock on that signal alone, not
+        // by counting attempts itself.
         User user = new User(EMAIL, HASH, Instant.now());
         when(attemptLimiter.isBlocked(EMAIL)).thenReturn(false);
         when(users.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(PASSWORD, HASH)).thenReturn(false);
-
-        for (int i = 0; i < 9; i++) {
-            assertThrows(InvalidCredentialsException.class,
-                    () -> loginService.authenticate(EMAIL, PASSWORD));
-        }
-        assertFalse(user.isLocked(Instant.now()), "locked before the threshold was reached");
+        when(attemptLimiter.recordFailure(EMAIL)).thenReturn(true);
 
         assertThrows(InvalidCredentialsException.class,
                 () -> loginService.authenticate(EMAIL, PASSWORD));
 
-        assertEquals(10, user.getFailedLoginAttempts());
         assertTrue(user.isLocked(Instant.now().plusSeconds(1)));
     }
 
@@ -110,9 +106,7 @@ class LoginServiceTest {
         // same exception, same BCrypt cost - or the lock state itself
         // becomes an enumeration/timing oracle.
         User user = new User(EMAIL, HASH, Instant.now());
-        for (int i = 0; i < 10; i++) {
-            user.recordFailedLogin(Instant.now(), SECURITY.lockThreshold(), SECURITY.lockDuration());
-        }
+        user.lock(Instant.now(), SECURITY.lockDuration());
         when(attemptLimiter.isBlocked(EMAIL)).thenReturn(false);
         when(users.findByEmail(EMAIL)).thenReturn(Optional.of(user));
 
@@ -121,16 +115,18 @@ class LoginServiceTest {
 
         verify(passwordEncoder).matches(eq(PASSWORD), eq(HASH));
         verify(attemptLimiter).recordFailure(EMAIL);
-        // A locked attempt must not fall through to user.recordFailedLogin -
-        // the count must stay exactly at what already tripped the lock.
-        assertEquals(10, user.getFailedLoginAttempts());
+        // A locked attempt must not re-lock or otherwise mutate the
+        // existing lock state.
+        assertTrue(user.isLocked(Instant.now()));
     }
 
     @Test
-    void successfulLoginResetsBothTheRedisAndDatabaseCounters() {
+    void successfulLoginResetsBothTheRedisAndDatabaseState() {
         User user = new User(EMAIL, HASH, Instant.now());
-        user.recordFailedLogin(Instant.now(), SECURITY.lockThreshold(), SECURITY.lockDuration());
-        user.recordFailedLogin(Instant.now(), SECURITY.lockThreshold(), SECURITY.lockDuration());
+        // Locked in the past, not currently active, so authenticate()
+        // reaches the password check rather than the locked branch, and
+        // this proves unlock() clears a stale lockedUntil on success too.
+        user.lock(Instant.now().minus(Duration.ofHours(1)), Duration.ofMinutes(1));
 
         when(attemptLimiter.isBlocked(EMAIL)).thenReturn(false);
         when(users.findByEmail(EMAIL)).thenReturn(Optional.of(user));
@@ -139,7 +135,6 @@ class LoginServiceTest {
         User result = loginService.authenticate(EMAIL, PASSWORD);
 
         assertEquals(user, result);
-        assertEquals(0, user.getFailedLoginAttempts());
         assertFalse(user.isLocked(Instant.now()));
         verify(attemptLimiter).reset(EMAIL);
         verify(attemptLimiter, never()).recordFailure(anyString());
@@ -150,6 +145,9 @@ class LoginServiceTest {
         when(attemptLimiter.isBlocked(EMAIL)).thenReturn(false);
         when(users.findByEmail(EMAIL)).thenReturn(Optional.empty());
         when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
+        // Even if Redis reports a trip, there is no user row to lock -
+        // this must not throw or otherwise misbehave against an absent user.
+        when(attemptLimiter.recordFailure(EMAIL)).thenReturn(true);
 
         assertThrows(InvalidCredentialsException.class,
                 () -> loginService.authenticate(EMAIL, PASSWORD));

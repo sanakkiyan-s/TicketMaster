@@ -76,7 +76,8 @@ class LoginSecurityTest {
         // Every test in this class hits the SAME email against a SHARED
         // Redis - without this, failures recorded by one test bleed into
         // the next and the boundary assertions below stop meaning anything.
-        redis.delete("login-fail:" + EMAIL);
+        redis.delete("login-fail:fast:" + EMAIL);
+        redis.delete("login-fail:slow:" + EMAIL);
     }
 
     private MvcResult login(String email, String password) throws Exception {
@@ -115,19 +116,29 @@ class LoginSecurityTest {
     }
 
     @Test
-    void theTenthFailureAcrossManyWindowsLocksTheAccountInTheDatabase() throws Exception {
-        // 10 failures spread across two separate Redis windows (resetting
-        // the Redis counter between them) - proving the DB-persisted lock
-        // survives what an attacker pacing under the Redis limit would
-        // otherwise dodge entirely.
-        for (int i = 0; i < 5; i++) {
-            login(EMAIL, WRONG);
+    void theFifteenthFailureAcrossManyFastWindowsLocksTheAccountInTheDatabase() throws Exception {
+        // 15 failures (the default slow-window limit, application.yml)
+        // spread across five batches of 3 - each batch stays safely
+        // under the fast window's own limit (5), so the fast key is
+        // cleared between batches without ever tripping it, while the
+        // slow key keeps accumulating across all five. Proves the DB
+        // lock trips from the slow window alone, exactly the attacker
+        // who paces guesses under the fast window's rate to dodge it.
+        for (int batch = 0; batch < 5; batch++) {
+            for (int i = 0; i < 3; i++) {
+                assertEquals(401, login(EMAIL, WRONG).getResponse().getStatus());
+            }
+            redis.delete("login-fail:fast:" + EMAIL);
         }
-        redis.delete("login-fail:" + EMAIL);
-        for (int i = 0; i < 5; i++) {
-            login(EMAIL, WRONG);
-        }
-        redis.delete("login-fail:" + EMAIL);
+
+        // Both Redis windows are now at their cap, so isBlocked() alone
+        // would reject the very next attempt with 429 - clearing them
+        // here simulates their TTL having long since expired, isolating
+        // what this test actually wants to prove: the DB-persisted lock
+        // survives independently of Redis state, unlike the Redis
+        // windows themselves.
+        redis.delete("login-fail:fast:" + EMAIL);
+        redis.delete("login-fail:slow:" + EMAIL);
 
         // Correct password, but the account itself is now locked - must
         // fail the SAME way as a wrong password (401, identical body),
@@ -136,6 +147,6 @@ class LoginSecurityTest {
         assertEquals(401, lockedAttempt.getResponse().getStatus());
 
         User locked = users.findByEmail(EMAIL).orElseThrow();
-        assertTrue(locked.isLocked(Instant.now()), "account should be locked after 10 failures");
+        assertTrue(locked.isLocked(Instant.now()), "account should be locked after 15 failures");
     }
 }

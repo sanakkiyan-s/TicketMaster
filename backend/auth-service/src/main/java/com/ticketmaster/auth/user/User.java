@@ -54,15 +54,10 @@ public class User {
     private Set<String> roles = new HashSet<>();
 
     /**
-     * Slow-attacker backstop behind LoginAttemptLimiter's Redis window
-     * (auth-service). Redis forgets every failure once its window
-     * expires; this persists across arbitrarily many windows, so an
-     * attacker pacing guesses just under 5/min forever still eventually
-     * locks the account out.
+     * The persistent side of ADR-040's login lockout: LoginAttemptLimiter
+     * decides WHEN to trip (its Redis fast/slow windows), this is the one
+     * DB write that follows, surviving past either Redis window's own TTL.
      */
-    @Column(name = "failed_login_attempts", nullable = false)
-    private int failedLoginAttempts = 0;
-
     @Column(name = "locked_until")
     private Instant lockedUntil;
 
@@ -91,23 +86,20 @@ public class User {
     }
 
     /**
-     * Called on every wrong-password attempt against a known user.
-     * Locking at exactly {@code lockThreshold} failures, not after, means
-     * the (threshold)th attempt is the one that trips the lock rather than
-     * requiring one more beyond it.
+     * Called once LoginAttemptLimiter's Redis windows (ADR-040) report
+     * either threshold crossed by the current failure - not on every
+     * failed attempt, only the one that trips it. That is the whole
+     * point of moving counting to Redis: this is the single DB write per
+     * lock cycle, not one per attempt.
      */
-    public void recordFailedLogin(Instant now, int lockThreshold, Duration lockDuration) {
-        this.failedLoginAttempts++;
+    public void lock(Instant now, Duration lockDuration) {
+        this.lockedUntil = now.plus(lockDuration);
         this.updatedAt = now;
-        if (this.failedLoginAttempts >= lockThreshold) {
-            this.lockedUntil = now.plus(lockDuration);
-        }
     }
 
     /** Called on every successful login - a real password clears the slate. */
-    public void resetFailedLogins(Instant now) {
-        if (this.failedLoginAttempts != 0 || this.lockedUntil != null) {
-            this.failedLoginAttempts = 0;
+    public void unlock(Instant now) {
+        if (this.lockedUntil != null) {
             this.lockedUntil = null;
             this.updatedAt = now;
         }

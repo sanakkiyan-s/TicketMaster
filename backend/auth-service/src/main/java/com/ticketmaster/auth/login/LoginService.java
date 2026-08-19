@@ -42,18 +42,18 @@ class LoginService {
     }
 
     /**
-     * Not readOnly: a failed or successful attempt writes back to the
-     * user's failedLoginAttempts/lockedUntil (see User#recordFailedLogin,
-     * User#resetFailedLogins), persisted via JPA dirty checking on commit.
+     * Not readOnly: a tripped attempt or a successful login writes back
+     * to the user's lockedUntil (see User#lock, User#unlock), persisted
+     * via JPA dirty checking on commit.
      *
-     * noRollbackFor is load-bearing, not optional: this method's whole
-     * failure path mutates the user (recordFailedLogin) and THEN throws
+     * noRollbackFor is load-bearing, not optional (ADR-040 keeps this
+     * from the single-window design it replaces): the wrong-password
+     * branch below can mutate the user (lock) and THEN throw
      * InvalidCredentialsException to fail the request. Spring's default
      * rollback rule reverts a transaction on any unchecked exception,
-     * which would silently discard that exact mutation on every single
-     * failed attempt - the DB-backed lockout would never actually
-     * persist, while looking correct in every code review because the
-     * response is still a normal 401.
+     * which would silently discard that exact mutation - the DB-backed
+     * lock would never actually persist, while looking correct in every
+     * code review because the response is still a normal 401.
      */
     @Transactional(noRollbackFor = InvalidCredentialsException.class)
     User authenticate(String email, String rawPassword) {
@@ -67,7 +67,10 @@ class LoginService {
         Instant now = Instant.now();
 
         if (found.isEmpty()) {
-            // Burn the same work, then fail the same way.
+            // Burn the same work, then fail the same way. No user row to
+            // lock regardless of the Redis windows' state - enumeration
+            // safety only requires the counter behave identically, not
+            // that a lock actually exist to trip.
             passwordEncoder.matches(rawPassword, DUMMY_HASH);
             attemptLimiter.recordFailure(email);
             throw new InvalidCredentialsException();
@@ -84,12 +87,16 @@ class LoginService {
         }
 
         if (!passwordEncoder.matches(rawPassword, user.getPasswordHash())) {
-            user.recordFailedLogin(now, security.lockThreshold(), security.lockDuration());
-            attemptLimiter.recordFailure(email);
+            // recordFailure returns true only on the ONE attempt that
+            // just crossed a Redis threshold - a single DB write per
+            // lock cycle, not one per failed attempt (ADR-040).
+            if (attemptLimiter.recordFailure(email)) {
+                user.lock(now, security.lockDuration());
+            }
             throw new InvalidCredentialsException();
         }
 
-        user.resetFailedLogins(now);
+        user.unlock(now);
         attemptLimiter.reset(email);
         return user;
     }

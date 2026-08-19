@@ -17,9 +17,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Runs against a real Redis, not a mock - the thing actually worth
- * proving here (the atomic INCR+EXPIRE in login_attempt.lua, and the
- * exact boundary where the 5th recorded failure trips the limiter) only
- * means something against real Redis semantics.
+ * proving here (the atomic two-window INCR+EXPIRE in
+ * login_attempt_windows.lua, and the exact boundary where each window
+ * trips) only means something against real Redis semantics.
  */
 class LoginAttemptLimiterTest {
 
@@ -53,7 +53,7 @@ class LoginAttemptLimiterTest {
         // A fresh email per test, so tests never share a Redis key.
         email = "user-" + (testCounter++) + "@example.com";
         limiter = new LoginAttemptLimiter(redis,
-                new LoginSecurityProperties(5, Duration.ofMinutes(1), 10, Duration.ofMinutes(15)));
+                new LoginSecurityProperties(5, Duration.ofMinutes(1), 15, Duration.ofHours(24), Duration.ofMinutes(15)));
     }
 
     @Test
@@ -62,7 +62,7 @@ class LoginAttemptLimiterTest {
     }
 
     @Test
-    void notBlockedBelowTheLimit() {
+    void notBlockedBelowTheFastLimit() {
         // LoginService checks isBlocked() BEFORE processing the current
         // attempt, so a count of (limit - 1) must still pass through - it
         // is the NEXT attempt, the one that would push the count to the
@@ -74,7 +74,7 @@ class LoginAttemptLimiterTest {
     }
 
     @Test
-    void blockedOnceTheCountReachesTheLimit() {
+    void blockedOnceTheFastCountReachesItsLimit() {
         for (int i = 0; i < 5; i++) {
             limiter.recordFailure(email);
         }
@@ -82,7 +82,27 @@ class LoginAttemptLimiterTest {
     }
 
     @Test
-    void resetClearsTheCounterEvenAfterBlocking() {
+    void recordFailureReportsTrueOnlyOnTheAttemptThatTripsTheFastWindow() {
+        for (int i = 0; i < 4; i++) {
+            assertFalse(limiter.recordFailure(email), "attempt " + (i + 1) + " should not trip yet");
+        }
+        assertTrue(limiter.recordFailure(email), "the 5th attempt is the one that trips the fast window");
+    }
+
+    @Test
+    void slowWindowTripsOnItsOwnLimitEvenWhenTheFastWindowNeverDoes() {
+        // A high fast-window limit that this test never reaches, so only
+        // the slow window's own threshold can trip recordFailure().
+        LoginAttemptLimiter slowOnly = new LoginAttemptLimiter(redis,
+                new LoginSecurityProperties(1000, Duration.ofMinutes(1), 15, Duration.ofHours(24), Duration.ofMinutes(15)));
+        for (int i = 0; i < 14; i++) {
+            assertFalse(slowOnly.recordFailure(email), "attempt " + (i + 1) + " should not trip yet");
+        }
+        assertTrue(slowOnly.recordFailure(email), "the 15th attempt is the one that trips the slow window");
+    }
+
+    @Test
+    void resetClearsBothWindowsEvenAfterBlocking() {
         for (int i = 0; i < 5; i++) {
             limiter.recordFailure(email);
         }
@@ -121,13 +141,13 @@ class LoginAttemptLimiterTest {
         StringRedisTemplate brokenRedis = new StringRedisTemplate(brokenFactory);
 
         LoginAttemptLimiter brokenLimiter = new LoginAttemptLimiter(brokenRedis,
-                new LoginSecurityProperties(5, Duration.ofMinutes(1), 10, Duration.ofMinutes(15)));
+                new LoginSecurityProperties(5, Duration.ofMinutes(1), 15, Duration.ofHours(24), Duration.ofMinutes(15)));
 
-        // Neither call should throw, and neither should report blocked -
-        // an outage narrows defense in depth, it must not become a second
-        // way to lock every user out of login.
+        // Neither call should throw, and neither should report
+        // blocked/tripped - an outage narrows defense in depth, it must
+        // not become a second way to lock every user out of login.
         assertFalse(brokenLimiter.isBlocked(email));
-        brokenLimiter.recordFailure(email);
+        assertFalse(brokenLimiter.recordFailure(email));
         brokenLimiter.reset(email);
 
         brokenFactory.destroy();
