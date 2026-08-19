@@ -34,6 +34,27 @@ spring:
         response-timeout: 10s
 
 gateway:
+  rate-limit:
+    enabled: true
+    rules:
+      # Login: bounds credential-stuffing throughput per IP. 10/min is a
+      # starting default, not measured against real traffic - generous
+      # enough that a typo-prone legitimate user or a shared corporate/NAT IP
+      # is unlikely to trip it, while still keeping brute-force guessing far
+      # below anything that threatens a 12-char password (RegisterRequest's
+      # own minimum). Combined with BCrypt(12)'s ~250ms cost and the
+      # byte-identical 401 for unknown-email vs wrong-password, this is
+      # defense in depth, not the only control.
+      - path-prefix: /api/v1/auth/login
+        limit: 10
+        window: PT1M
+      # Register: looser abuse profile (bulk signup, not password guessing),
+      # so a slightly tighter limit is fine - one legitimate signup rarely
+      # needs more than a couple of retries.
+      - path-prefix: /api/v1/auth/register
+        limit: 5
+        window: PT1M
+
   jwt:
     jwks-uri: ${JWKS_URI:http://localhost:8081/.well-known/jwks.json}
     issuer: ${JWT_ISSUER:http://localhost:8081}

@@ -1146,3 +1146,58 @@ token proxied through to auth-service.
   table or Debezium connector exists yet. Until then a revoked refresh family
   does not invalidate already-issued access tokens for up to 10 minutes.
 - Rate limiting (ADR-014) not wired, though the Redis dependency is present.
+
+## 2026-08-19 (gateway rate limiting)
+
+### Decided
+- **Login/register rate limits, concrete numbers for the first time.**
+  ADR-014 named rate limiting as part of the anti-bot posture but specified no
+  values. Login: 10 requests/minute per IP. Register: 5/minute per IP -
+  starting defaults, not measured against real traffic, same honesty as
+  ADR-012's token lifetimes. Login is looser than a typical brute-force guard
+  because a shared corporate/NAT IP or a typo-prone user must not get locked
+  out; it is defense in depth on top of BCrypt(12)'s ~250ms cost and the
+  byte-identical 401 already closing account enumeration, not the only
+  control.
+- **Hand-rolled fixed-window Redis filter, not Spring Cloud Gateway's
+  RequestRateLimiter.** The built-in RedisRateLimiter's config is integer
+  requests-PER-SECOND; "10 per minute" is not representable without either
+  truncating to 0 (disables the limiter entirely) or a requestedTokens hack.
+  A four-line Lua script (INCR, EXPIRE on first hit, return TTL) gives exact
+  per-minute control and is easy to test deterministically - assert the Nth
+  request is the boundary, rather than reasoning about token-bucket timing.
+- **Keyed by IP, never by header.** X-Forwarded-For is attacker-controlled on
+  any request that reaches this filter directly; trusting it would let a
+  client rotate the header per request and never be throttled. The socket
+  address is used until a real proxy sits in front (ADR-019), at which point
+  this needs a trusted-proxy allowlist, not blind trust of the header.
+- **Fails OPEN on a Redis outage**, not closed. Rate limiting is one layer
+  among several; losing it during an outage narrows defense in depth. Failing
+  closed here would mean a Redis blip locks every user out of logging in at
+  all - the same shape of mistake ADR-012 explicitly rejected for the
+  revocation map, applied to a second control.
+
+### Added
+- `gateway/ratelimit/` - `RateLimitRule`, `RateLimitProperties`,
+  `RateLimitFilter`, `scripts/rate_limit.lua`.
+- `RateLimitFilterTest` - 6 tests against a real Redis container: exact
+  boundary (Nth request), independent per-IP counters, unrelated paths never
+  throttled, window reset after real expiry, fail-open on a broken Redis
+  connection.
+
+### Notes
+- Runs BEFORE JwtAuthenticationFilter (order +50 vs +100): a flooding client
+  is turned away before token-parsing work runs at all, not after.
+- Response carries `X-RateLimit-Limit` / `X-RateLimit-Remaining` on every
+  request, not just the 429 - lets a well-behaved client back off proactively
+  rather than discovering the limit by hitting it.
+- Fixed window accepts a known imprecision: up to 2x the limit can pass right
+  at a window boundary (a burst just before + just after). Documented as an
+  accepted trade for this being an anti-abuse control, not a hard security
+  boundary - the byte-identical 401 and BCrypt cost do the precise work.
+- Verified live through :8080, not just green tests: 10 login attempts pass,
+  the 11th returns 429 with an accurate Retry-After; register's limit is
+  independent and still admits its own request; /api/v1/events (no rule
+  configured) is never touched by either limiter.
+- 54 tests green across the whole repo; ./gradlew build passes on all 15
+  modules.
