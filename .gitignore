@@ -5,6 +5,12 @@ build/
 gradle-app.setting
 !gradle-wrapper.properties
 
+# Eclipse / VS Code Java plugin output. The plugin builds to bin/ rather than
+# Gradle's build/, so its compiled .class files slipped past the build/ rule
+# and got committed in 1d2241f. Note .gitignore does not untrack what is
+# already tracked - see README/the log entry for the one-time cleanup.
+bin/
+
 # IDE
 .idea/
 *.iml

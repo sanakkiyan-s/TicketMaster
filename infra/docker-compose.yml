@@ -13,11 +13,23 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketmaster}
       POSTGRES_DB: ${POSTGRES_DB:-ticketmaster}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pg_coordinator_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ticketmaster}"]
+      # Authenticated query over TCP, not pg_isready. pg_isready only asks
+      # "is the server accepting connections" — it never logs in, so a
+      # Postgres whose credentials nobody can use still reports healthy,
+      # and the failure lands later inside a Spring stack trace instead of
+      # here. That happened on 2026-08-18.
+      #
+      # -h 127.0.0.1 is load-bearing: a Unix-socket connection matches the
+      # image's `local all all trust` rule and would pass with any password
+      # at all. Only the TCP path actually exercises the password.
+      #
+      # $$ escapes compose interpolation so the container's own env is read
+      # at exec time rather than baking the values into the config.
+      test: ["CMD-SHELL", "PGPASSWORD=$${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c 'SELECT 1' >/dev/null 2>&1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -31,7 +43,10 @@ services:
     volumes:
       - pg_worker1_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ticketmaster}"]
+      # Same authenticated TCP probe as the coordinator — see the comment
+      # there for why pg_isready and Unix-socket psql both pass against a
+      # server nobody can authenticate to.
+      test: ["CMD-SHELL", "PGPASSWORD=$${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c 'SELECT 1' >/dev/null 2>&1"]
       interval: 5s
       timeout: 5s
       retries: 10

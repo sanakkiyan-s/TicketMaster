@@ -654,3 +654,495 @@ notification design discussed earlier (KodeKloud FCM/pub-sub comparison).
   and `Manifests:` rows both marked NOT DECIDED; both Open Decisions lists
   extended.
 - `wiki/index.md` — gap added to Open Questions.
+
+## 2026-08-14 (cont. — auth-service skeleton, first code in the repo)
+
+### Added
+- `backend/auth-service/src/main/java/com/ticketmaster/auth/AuthApplication.java`
+  — `@SpringBootApplication`. First Java file in this repository
+  (ADR-036 Phase 1).
+- `backend/auth-service/src/main/resources/application.yml` — port 8081,
+  datasource via `DB_*` env vars with local-dev defaults, Flyway enabled,
+  `spring.jpa.hibernate.ddl-auto: validate`, actuator health with
+  ADR-032's liveness/readiness probes exposed. Points at Postgres
+  directly rather than PgBouncer (:6432) for now — ADR-024's pooling is
+  production shape, and going direct keeps a local startup failure one
+  hop instead of two while there is nothing to pool.
+- `backend/auth-service/src/main/resources/db/migration/V1__baseline.sql`
+  — `users` (CITEXT email so a case-duplicate account is
+  unrepresentable), `user_roles` (rows not a column, since ADR-030 needs
+  one user to hold USER + ORGANIZER), `refresh_tokens` (SHA-256
+  `token_hash` never the token itself, `family_id` for ADR-012's reuse
+  detection, `used_at` retained rather than deleted because a second
+  presentation IS the theft signal). Timestamps app-supplied, never
+  `DEFAULT now()`, per ADR-002's amendment.
+- `backend/auth-service/src/test/java/.../AuthApplicationTest.java` —
+  Testcontainers Postgres, ADR-008 integration tier. 3 tests, green.
+
+### Changed
+- `backend/auth-service/build.gradle.kts` — re-enables `bootJar` and
+  disables plain `jar` (both write to build/libs and collide on archive
+  name). First module to take the root build's documented opt-back-in.
+- Root `build.gradle.kts` — Testcontainers 1.20.1 -> 1.21.4, and
+  `systemProperty("api.version", "1.44")` added to `tasks.withType<Test>`.
+- `wiki/projects/auth-service.md` — rewritten: Current Implementation now
+  describes real code; both Open Questions removed.
+
+### Resolved Questions
+- `auth-service.md`'s two open questions (refresh-token storage DB vs
+  Redis; revocation strategy) deleted. **They were stale, not newly
+  resolved** — ADR-012 answered both on 2026-08-06 and `index.md` had
+  recorded them as resolved the whole time; only the project page was
+  never updated.
+
+### Notes
+- **Docker Engine 29.x breaks Testcontainers' default API negotiation.**
+  Engine answers `/info` with HTTP 400 and an all-empty stub body, and
+  Testcontainers reports it as "Could not find a valid Docker
+  environment" — which sends you hunting for a socket/pipe problem that
+  does not exist. The Docker CLI worked fine throughout. Diagnosed by
+  reading the raw 400 body out of the JUnit XML. Fix is the `api.version`
+  pin above; revisit when Testcontainers ships a client that negotiates
+  correctly against Engine 29+.
+- Testcontainers 2.0.5 was tried and rejected: at 2.x the DB modules and
+  JUnit 5 integration are not published under the existing coordinates
+  (`org.testcontainers:postgresql` and `:junit-jupiter` both stop at
+  1.21.4), and the consolidated `org.testcontainers:testcontainers:2.0.5`
+  jar contains no Postgres or JUnit classes.
+- Infra verified booting via `scripts/dev.sh infra` before this work —
+  the script's container path is no longer untested.
+
+### Opened Questions
+- ADR-018 shards auth-service by `user_id` under Citus. `V1__baseline.sql`
+  creates plain tables with no `create_distributed_table()` call, since a
+  single-node dev Postgres has nothing to distribute across. The
+  distribution migration is deferred and must not be forgotten before a
+  real multi-node cluster exists.
+
+## 2026-08-14 (cont. - service internal architecture)
+
+### Added
+- `wiki/decisions/ADR-037-service-internal-architecture.md` - package by
+  feature, cross-cutting concerns by type. Closes a gap 36 ADRs had left
+  open: nothing anywhere said how a single service is organised
+  internally, so auth-service had been written with the Spring default
+  and no recorded reason.
+
+### Decisions
+- **Package by feature.** Decided on compiler enforcement rather than
+  preference: with a feature's classes in one package the service class
+  can be package-private, so another feature calling it fails to
+  compile. Package-by-layer forces every class public and can only
+  document the boundary. Same reasoning shape as ADR-002's
+  unique-constraint backstop and ADR-025's colocated body hash - make
+  the mistake unrepresentable rather than discouraged.
+- **No layer sub-folders inside a feature** (`registration/controller/`
+  would be a separate package again, forcing the service public and
+  discarding the benefit). A feature that outgrows one folder splits by
+  sub-feature: `token/keys/`, `token/jwks/`.
+- **One error shape per service**: `@RestControllerAdvice` in `shared/`
+  returning RFC 9457 `ProblemDetail`. Per-controller handlers produced
+  two different shapes from one API, and ADR-034 publishes that shape as
+  the OpenAPI contract.
+- **Lombok policy**: `@Getter` permitted; `@Data`, `@Setter`,
+  `@ToString`, `@EqualsAndHashCode` forbidden on JPA entities -
+  `@ToString` would print a password hash into any log line touching a
+  User, `@EqualsAndHashCode` breaks under JPA field population and lazy
+  loading, `@Setter` defeats the constructor's invariants.
+- **Hexagonal rejected for now, on cost not principle.** For services
+  whose domain rules are "validate, hash, insert" the mapper layer is
+  ceremony. Named revisit trigger: inventory-service and
+  booking-service, where the real invariants live.
+
+### Changed
+- auth-service restructured to the new layout (commit 6535dc7):
+  `config/`, `shared/`, `user/`, `registration/`. `RegistrationService`
+  is now package-private.
+- `user/User.java` - Lombok `@Getter` replaces five hand-written
+  accessors; `getRoles()` stays hand-written because it returns a
+  defensive copy, so a caller cannot grant itself a role by mutating the
+  set it was handed.
+- `wiki/index.md` - ADR-037 indexed.
+
+### Notes
+- 12 tests green across auth-service; `./gradlew build` passes on all 15
+  modules after the restructure.
+
+## 2026-08-18 (OpenAPI wired into auth-service)
+
+### Decided
+- **springdoc runs per service, not on api-gateway alone** - amends
+  [[ADR-034-rest-edge-versioning-openapi]]. The gateway proxies routes and
+  cannot see `RegisterRequest`'s constraints, so a gateway-generated spec
+  would have to be hand-written, which is the one thing ADR-034 forbids.
+  Gateway aggregates; services generate.
+- **springdoc 2.8.9** replaces the 2.6.0 pinned on api-gateway. 2.6.0
+  targets Spring Boot 3.3; this repo runs 3.5.6.
+- **Spec is committed and regenerated by a test.** ADR-034's drift gate
+  needs a previous version in git to diff against, and that only exists if
+  something rewrites it every build. `OpenApiSpecTest` writes
+  `backend/auth-service/openapi/auth-service.json`; CI diffs it. A dirty
+  working tree after `test` IS the drift signal.
+
+### Changed
+- `backend/auth-service/build.gradle.kts`,
+  `backend/api-gateway/build.gradle.kts` - springdoc dependency / version.
+- `config/OpenApiConfig.java` (new) - document metadata only; `servers`
+  pinned to `/` so the committed spec is deterministic.
+- `registration/RegistrationController.java` - `@Tag`, `@Operation`,
+  and explicit 400/409 `ProblemDetail` responses. The error shape is part
+  of the contract (ADR-037), so it belongs in the published spec rather
+  than being discovered by hitting it.
+- `config/SecurityConfig.java` - `/v3/api-docs/**`, `/swagger-ui/**`
+  permitted. Safe only while internal: the gateway must not route them and
+  `SWAGGER_UI_ENABLED=false` in production.
+
+### Fixed
+- **Postgres coordinator moved to host port 5433.** A native Postgres
+  install already owned 5432 on this machine, so `bootRun` authenticated
+  against the wrong server and failed with `28P01 password authentication
+  failed for user "ticketmaster"`. That message is misleading by design:
+  Postgres reports the same `28P01` for an **unknown role** as for a wrong
+  password, to prevent user enumeration - so "wrong credentials" and "wrong
+  server entirely" are indistinguishable from the error alone. Compose now
+  maps `5433:5432`; `DB_PORT` defaults to 5433.
+- **Both Postgres healthchecks now authenticate.** `pg_isready` only asks
+  whether the server accepts connections - it never logs in - so a
+  coordinator nobody can authenticate to reported `healthy` and the failure
+  surfaced later inside a Spring stack trace. Replaced with
+  `PGPASSWORD=... psql -h 127.0.0.1 -c 'SELECT 1'`. `-h 127.0.0.1` is
+  load-bearing: a Unix-socket connection matches the image's
+  `local all all trust` rule and would pass with any password at all.
+- **`dev.sh` now proves the published port reaches the compose container.**
+  A container-side healthcheck cannot detect a port squatter. The new check
+  compares `system_identifier` (unique per cluster, set once by `initdb`)
+  read inside the container against the same value read through
+  `localhost:5433`; different values mean a different server owns the port.
+  Also worth remembering: `POSTGRES_PASSWORD` is consumed **only by
+  `initdb` on an empty data directory** and is inert forever after, so a
+  stale volume keeps its original password no matter what `.env` says -
+  that was the other candidate cause here, and `dev.sh reset` clears it.
+- **`src/test/resources/application.yml` was silently replacing the whole
+  service config.** Spring resolves `classpath:/application.yml` to the
+  FIRST match on the classpath - it does not merge - so every test had been
+  running against framework defaults, with none of `application.yml`'s
+  datasource, JPA `validate`, Flyway or actuator settings applied. It
+  looked fine because `@DynamicPropertySource` supplied the datasource and
+  the defaults happened to work. Surfaced only because `OpenApiConfig`
+  read `${spring.application.name}` and the context failed to start.
+  The file is deleted; `grpc.server.port=-1` and the Testcontainers log
+  levels are now system properties in the root `tasks.withType<Test>`,
+  where they cannot shadow anything and apply to all 15 modules.
+
+### Notes
+- 14 tests green in auth-service; `./gradlew build` passes on all 15
+  modules.
+- CI cannot actually run the drift diff yet - the CI runner platform is
+  still an open decision.
+
+## 2026-08-18 (cont. — access tokens + JWKS)
+
+### Decided
+- **Key storage was already decided; only the location of the seam was
+  open.** [[ADR-010-secrets-management]] puts the JWT signing private key in
+  Vault KV v2, loaded into memory at startup, never written to disk, and
+  explicitly NOT Vault Transit - auth-service signs on every login and
+  refresh, so a network round trip per signature is too expensive. No new
+  ADR needed.
+- **`SigningKeyProvider` seam, with an ephemeral dev implementation.** The
+  Vault provider needs a client, a seeded secret and an auth path, which is
+  its own slice; blocking token issuance on it would be sequencing for its
+  own sake. The interface splits `signing()` from `published()` because
+  ADR-012 phase 1 requires a key to be published for at least one gateway
+  cache TTL BEFORE anything signs with it - one combined method makes that
+  phase unrepresentable.
+- **`kid` is the RFC 7638 JWK thumbprint**, not a counter or random string.
+  The same key then yields the same kid whoever computes it, and two keys
+  cannot collide during an overlap.
+- **JWKS lives at `/.well-known/jwks.json`, outside `/api/v1`.** It is a
+  registered well-known URI and infrastructure rather than product API;
+  versioning it would break every standard client. ADR-034's versioning
+  governs the client-facing surface only.
+
+### Added
+- `jwt/SigningKey`, `jwt/SigningKeyProvider`,
+  `jwt/EphemeralSigningKeyProvider`, `jwt/Base64Url`, `jwt/JwtProperties`,
+  `jwt/AccessTokenIssuer`, `jwt/JwksController`.
+- `auth.jwt.*` config: `issuer`, `audience`, `access-token-ttl` (PT10M per
+  ADR-012), `key-source`. Validated at startup - a blank issuer is a refusal
+  to start, not a run of tokens the gateway will reject.
+- `JwtTest` - 5 tests. The load-bearing one rebuilds the public key from the
+  published `n`/`e` and verifies a real signature with it, because asserting
+  the JSON shape alone would pass with plain-base64 instead of base64url, or
+  with BigInteger's sign byte still on the modulus. Both produce a JWKS that
+  parses cleanly and fails every verification in production. Another asserts
+  no private RSA parameter (`d`, `p`, `q`, `dp`, `dq`, `qi`) appears.
+- `openapi/auth-service.json` regenerated by the ADR-034 gate with no manual
+  step - it picked up `/.well-known/jwks.json` on its own, which is the
+  first evidence that gate actually works.
+
+### Notes
+- 19 tests green; `./gradlew build` passes on all 15 modules.
+- **The ephemeral provider is correct at one instance and wrong at two.**
+  Each replica would generate its own key, publish only that, and reject the
+  other's tokens. It is behind `auth.jwt.key-source=ephemeral` and logs a
+  WARN at startup so it cannot be mistaken for production-ready.
+- Not implemented: login itself (this only mints a token from an
+  already-established identity), refresh with reuse detection, the
+  four-phase rotation, the Vault provider, the auth.revocation producer.
+
+## 2026-08-18 (cont. — login, and CI decided)
+
+### Decided
+- **CI platform: GitHub Actions** - [[ADR-038-ci-platform]], closing an Open
+  Decision the roadmap had carried since it was written. It stopped being
+  theoretical once three ADRs were depending on a runner that did not exist:
+  ADR-034's spec-drift diff, ADR-023's `buf breaking`, and ADR-008's
+  Testcontainers tier (which needs a real Docker daemon). `ubuntu-latest`
+  provides that daemon with no setup step, and the repo is already on GitHub.
+  GitLab CI would have cost a migration to buy a better DSL; Jenkins is a
+  server somebody has to operate, which for a solo project is the worst trade
+  on the list.
+- **Refresh token ships as an httpOnly cookie, access token in the body.** Not
+  previously specified by ADR-012, which defines the token design but not its
+  delivery. A refresh token readable by JavaScript is stealable by any XSS,
+  and it is a 30-day credential - far more valuable to a thief than a 10-minute
+  access token. Cookie is `HttpOnly; Secure; SameSite=Strict;
+  Path=/api/v1/auth`; SameSite=Strict is also what makes CSRF on the refresh
+  endpoint a non-issue while the service stays CSRF-disabled.
+
+### Added
+- `login/` - `LoginRequest`, `LoginResponse`, `LoginService`,
+  `LoginController` (`POST /api/v1/auth/login`), `RefreshCookie`,
+  `InvalidCredentialsException`.
+- `token/` - `RefreshToken` entity, `RefreshTokenRepository`,
+  `RefreshTokenService`, `IssuedRefreshToken`, `TokenHashing`. Fills in the
+  `refresh_tokens` table that V1 created and nothing used.
+- `jwt/TokenMinting` - the jwt package's only public edge. `AccessTokenIssuer`
+  stays package-private so nothing outside `jwt/` can reach the class holding a
+  private key, or reach `SigningKeyProvider` and pull the key material itself.
+- `.github/workflows/ci.yml` - backend (JDK 21, Gradle cache, `./gradlew
+  build`, spec-drift check, test reports on `if: always()`) and frontend
+  (Node 20, `npm ci`, typecheck, build).
+- `LoginTest` - 6 tests.
+
+### Notes
+- **Three deliberate anti-enumeration measures, which are the substance of this
+  slice:**
+  1. Unknown email and wrong password throw the same exception and produce
+     **byte-identical** 401 bodies. A test asserts the two response strings are
+     equal, not merely that both are 401.
+  2. `LoginService` verifies the submitted password against a **dummy BCrypt
+     hash** when the email does not exist. Without it, a missing user returns
+     immediately while a real one pays ~250ms of BCrypt - a timing difference
+     measurable over the network that leaks exactly what the identical message
+     was hiding. The dummy's strength must stay at 12 to match the real
+     encoder, or the leak reopens.
+  3. `LoginRequest` deliberately omits `@Email` and the 12-char minimum.
+     Restating registration's policy on the login form would tell an attacker
+     the rule, and a 400 for "malformed" versus 401 for "wrong" is itself an
+     oracle. The `@Size` caps remain, as DoS guards - without them a 10 MB
+     "password" reaches deliberately-slow BCrypt.
+- Refresh tokens are hashed with **SHA-256, unsalted, not bcrypt** (ADR-012).
+  The token is 256 bits of CSPRNG output, so there is nothing to brute-force;
+  bcrypt's work factor would add ~250ms of CPU to the endpoint every active
+  session hits every 10 minutes, for zero security. Unsalted because lookup is
+  BY the hash and two 256-bit random values are never equal.
+- 25 tests green across auth-service.
+- Still not implemented: the `/refresh` endpoint itself (reuse detection,
+  family revocation), which is what the `family_id`/`used_at` columns exist
+  for.
+
+## 2026-08-18 (cont. - Vault-backed signing keys)
+
+### Decided
+- **`spring-vault-core` (VaultTemplate), NOT `spring-cloud-vault-config`** -
+  a correction to ADR-010's own startup sketch, which describes loading Vault
+  secrets as a Spring `PropertySource`. That is right for static secrets and
+  wrong for signing keys: a PropertySource is resolved at bootstrap and frozen
+  for the life of the context, while ADR-012's rotation changes the key set
+  WHILE the service runs. Phase 1 publishes K2 before anything signs with it,
+  which a frozen PropertySource cannot represent. VaultTemplate re-reads on an
+  interval (60s, well under the ~15 min phase-1 window).
+- **Scope held to KV v2 only.** ADR-010 specifies four engines; JWT keys need
+  one. Transit is explicitly excluded by that ADR (a network round trip per
+  signature on the highest-QPS service is the wrong trade), and the dynamic
+  Postgres credentials piece - which the ADR itself flags as "most likely to
+  bite" - is left for its own slice rather than dragged in here.
+- **Token auth locally, AppRole deferred.** ADR-010 requires AppRole with a
+  response-wrapped secret_id, whose value is that an attacker who unwraps it
+  first makes the unwrap FAIL, so compromise is detectable. A static token
+  gives up that signal, so it stays a dev-only path.
+
+### Added
+- `jwt/VaultSigningKeyProvider`, `jwt/VaultConfig`, `jwt/VaultKeyProperties`,
+  `jwt/KeyCodec`, `jwt/KeyStatus`, `jwt/Thumbprint`.
+- `auth.jwt.vault.*` config, and `spring-vault-core:3.1.2` (version pinned -
+  Boot manages spring-vault only through the Spring Cloud Vault BOM, which
+  this project does not import).
+- `VaultSigningKeyProviderTest` - 6 tests against a real Vault container.
+
+### Notes
+- **`KeyStatus` is what makes rotation representable.** A PUBLISHED key is in
+  JWKS and accepted by gateways but signs nothing; exactly one key may be
+  SIGNING, and the provider throws if two are. Without that distinction
+  "publish then cut over" collapses into "cut over", and every warm-cached
+  gateway rejects every token for up to one cache TTL.
+- Tested against a real Vault rather than a mocked VaultTemplate. A mock would
+  only prove the class calls the methods it calls; the real failure modes here
+  are KV v2 nesting the payload under `data` and base64 DER surviving a round
+  trip, neither of which a mock can catch. One test recomputes the RFC 7638
+  thumbprint from the decoded key, so a mangled modulus changes the kid and
+  fails.
+- The provider fails fast at construction if there is no SIGNING key: a service
+  that starts without one answers every login with a 500, which reads as a bug
+  in login rather than a missing secret.
+- Vault being briefly unreachable does NOT stop token issuance - the cached key
+  set stays in memory and is served with a WARN. Only a cold start with no
+  cache fails.
+- `bootstrap-if-empty` (default false) lets a fresh local Vault work with no
+  seeding step. It means the service mints its own key, so it must never be
+  set in production.
+- **The ephemeral provider is kept**, not deleted: it lets the service and its
+  tests run with no Vault at all. `auth.jwt.key-source` still defaults to
+  `ephemeral`; switching the default to `vault` is a deployment decision, not
+  a code one.
+- 31 tests green; `./gradlew build` passes on all 15 modules.
+- Still open: ADR-012's four-phase rotation is now REPRESENTABLE but not
+  implemented - no KeyRotationService advances the phases yet.
+
+## 2026-08-18 (cont. - refresh endpoint, and a bootstrap race fixed)
+
+### Fixed
+- **Bootstrap race in the Vault provider, from code committed the same day.**
+  `kv.put` was unconditional, so with several replicas starting against an
+  empty path each generated a key and the last write won. The losers kept
+  signing with a kid that was no longer in JWKS until their 60s cache expired,
+  and the gateway rejected every token they issued - the ephemeral provider's
+  split-key defect, reintroduced through the bootstrap door. Now a CAS-0
+  create ("only if absent"); exactly one instance wins, and the losers
+  DISCARD the key they generated and adopt the winner's. Surfaced by a
+  question about multi-instance behaviour, not by a test.
+- **Reuse detection was being rolled back.** `rotate()` is `@Transactional`
+  and ends by throwing on reuse; a RuntimeException rolls back by default, so
+  the family revocation that detection had just performed was undone. The
+  attacker got a 401 and kept a working token, while the log claimed the
+  family was revoked. Now `noRollbackFor = InvalidRefreshTokenException`.
+  Caught by the test presenting the ATTACKER's rotated token after the 401
+  rather than stopping at the 401.
+
+### Added
+- `POST /api/v1/auth/refresh` - `refresh/RefreshController`, `RefreshResponse`.
+- `token/` - `RotatedSession`, `InvalidRefreshTokenException`, `rotate()` on
+  `RefreshTokenService`, plus `claim` and `revokeFamily` repository queries.
+- `RefreshCookie` moved `login/` -> `token/`: two features need it now, and
+  ADR-037 puts genuinely cross-feature pieces where both can reach them.
+- `RefreshTest` - 6 tests.
+
+### Notes
+- **The claim is one conditional UPDATE**, `WHERE used_at IS NULL`. Reading
+  then writing in two statements loses the race: two parallel refreshes both
+  read null, both rotate, and one token yields two live chains - which is
+  indistinguishable from theft. The database arbitrates; the loser gets 0 rows.
+- A losing race is treated as theft, which does log out a legitimate client
+  that double-submitted. Accepted deliberately: the two are indistinguishable
+  from the server, and guessing the other way lets an attacker keep a live
+  30-day credential.
+- **Roles are re-read from the database on every refresh**, never copied from
+  the old token. That bounds privilege staleness to one access-token lifetime
+  - a user demoted five minutes ago stops being an admin at their next
+  refresh, with no revocation machinery involved.
+- Rotation keeps the same `family_id` AND the same `session_id`. A fresh
+  session id per refresh would make "log out this device" unimplementable,
+  since the identifier a revocation targets would change every ten minutes.
+- All four failure modes (unknown / expired / revoked / replayed) return the
+  same 401 with no detail. The reason exists only in the log. "Reuse detected"
+  would tell an attacker their stolen token was noticed; "expired" rather than
+  "unknown" would confirm the token was real.
+- 38 tests green; `./gradlew build` passes on all 15 modules.
+- Still not implemented: the `auth.revocation` Kafka producer (ADR-012
+  amendment), so a revoked family is not yet pushed to gateway memory - a
+  revoked refresh token is dead, but access tokens already issued stay valid
+  for up to their 10 minutes.
+
+### Answered (from a question, worth keeping)
+- Rotation has NO trigger anywhere. `KeyStatus` is a model nothing writes to.
+  A per-replica timer would be the wrong shape: ten replicas advancing a phase
+  concurrently produce two SIGNING keys, which the provider refuses to load,
+  so a botched rotation would take down every instance at its next refresh.
+  The workable shapes are a Kubernetes CronJob (one pod by construction),
+  leader election, or an admin-triggered endpoint - with CAS underneath all
+  three. The CronJob option is blocked on the manifest-delivery Open Decision.
+
+## 2026-08-19 (api-gateway: routing + JWKS validation at the edge)
+
+### Added
+- `api-gateway` gets its first source: `GatewayApplication`, `jwt/JwksCache`,
+  `jwt/JwtAuthenticationFilter`, `jwt/JwtValidationProperties`,
+  `jwt/JwksHealthIndicator`, plus `application.yml` carrying the routing table.
+- `JwtAuthenticationFilterTest` - 10 tests.
+
+### Notes
+- **The JWKS cache has no on-demand fetch method at all.** Not an oversight:
+  the obvious design - fetch whenever an unknown `kid` arrives - is an
+  amplification vector, because an attacker sending garbage `kid` values turns
+  unauthenticated traffic into outbound load on auth-service from every
+  gateway instance at once, exactly when auth-service can least absorb it
+  (ADR-012). Two tests pin this, including one that fires 200 forged kids and
+  asserts the fetch count is still zero. Verified live as well: a forged kid
+  through the running gateway returned 401 with the fetch count unchanged.
+- ADR-012 also describes an emergency backstop (one out-of-band refetch per
+  60s, only when the unknown kid is seen from multiple distinct sources).
+  NOT implemented - the stricter subset (never fetch lazily) is what shipped.
+  It only degrades availability during an already-botched rotation, never
+  security.
+- **503, not 401, while JWKS has never loaded.** A 401 tells a client with a
+  perfectly good token to discard it and re-login, turning one gateway's cold
+  start into a login stampede against auth-service.
+- The Authorization header is **forwarded unchanged**, not stripped in favour
+  of a trusted `X-User-Id`. That pattern is only safe when downstream services
+  are unreachable except through the gateway; on a flat network any workload
+  could set the header and become any user. ADR-009's mesh mTLS is the
+  prerequisite and is not in place.
+- Global filters only run AFTER a route matches, so an unrouted path 404s
+  without reaching the filter. Not a hole - nothing is proxied - but it means
+  "no token -> 401" is only observable on a routed path.
+
+### Fixed (all five found by actually running it, none by tests)
+- **Spring Cloud Gateway 4.1.5 is incompatible with Boot 3.5.6.** Startup
+  fails with an explicit compatibility check naming the release train. Bumped
+  to 4.3.0 (the 2025.0 train).
+- **gRPC on the gateway broke startup**: `NoClassDefFoundError
+  io/grpc/netty/NettyChannelBuilder`. Spring Cloud Gateway sees `io.grpc` on
+  the classpath, activates its JsonToGrpc filter, then dies because the netty
+  transport is absent. This is the long-standing "gRPC deps on all 15 modules"
+  debt finally causing a concrete failure. Excluded from api-gateway, which
+  proxies HTTP and holds no stubs.
+- **JWKS cold start left the gateway dead for a full refresh interval.** The
+  initial fetch got "connection refused" when the gateway won the race against
+  auth-service, and the steady-state timer does not return for 5 minutes.
+  Added a 5-second retry that runs only until the first successful load.
+  Verified by deliberately starting the gateway FIRST: 6 failed attempts, then
+  ready.
+- **auth-service defaulted to Postgres 5432** while compose now publishes
+  5433 (moved to dodge a native install). Every `bootRun` failed. Same fix
+  applied to `scripts/dev.sh`, which was checking the wrong port.
+- **Unused Redis starter on auth-service** pointed at 6379 and made
+  `/actuator/health` report DOWN. Removed - ADR-012 puts refresh tokens in
+  Postgres, so auth-service has no Redis use. The gateway keeps Redis (ADR-014
+  rate limiting) and now configures port 6380.
+- Readiness includes the `jwks` indicator; liveness deliberately does not.
+  A gateway that cannot reach auth-service is not broken, and restarting it
+  would turn someone else's outage into a crash loop of our own (ADR-032).
+
+### Verified end to end (live, not just tests)
+Through the gateway on :8080 - register 201, login 200, refresh via the
+httpOnly cookie 200, wrong password 401, no token 401, forged kid 401, valid
+token proxied through to auth-service.
+
+### Still open
+- Revocation consumer: NOT built. Blocked on the `auth.revocation` producer,
+  which ADR-012 routes through ADR-007's transactional outbox - and no outbox
+  table or Debezium connector exists yet. Until then a revoked refresh family
+  does not invalidate already-issued access tokens for up to 10 minutes.
+- Rate limiting (ADR-014) not wired, though the Redis dependency is present.

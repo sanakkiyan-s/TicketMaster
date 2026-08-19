@@ -64,7 +64,8 @@ functioning product.
 
 ## Open Decisions (stack)
 
-- **CI runner/platform** (GitHub Actions vs GitLab CI vs Jenkins) —
+- ~~**CI runner/platform**~~ — DECIDED 2026-08-18: GitHub Actions, see
+  [[ADR-038-ci-platform]]. Original entry: (GitHub Actions vs GitLab CI vs Jenkins) —
   never named anywhere in the vault; only the pipeline *shape* (tiers,
   timing) is decided (ADR-008).
 - **Infrastructure-as-Code tooling** (Terraform vs Pulumi vs
@@ -459,7 +460,8 @@ yet.
 
 ## Open Decisions (summary, collected)
 
-- CI runner/platform not named.
+- ~~CI runner/platform not named.~~ RESOLVED 2026-08-18 by
+  [[ADR-038-ci-platform]]: GitHub Actions, two independent jobs.
 - IaC tooling not named (Terraform vs alternatives) — needed Phase 5/6.
   Every k8s assumption in the vault currently has no provisioning story.
 - k8s manifest delivery not named (ArgoCD / Flux / kubectl-from-CI /

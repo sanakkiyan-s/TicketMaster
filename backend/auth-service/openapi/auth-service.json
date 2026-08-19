@@ -1,0 +1,303 @@
+{
+  "openapi" : "3.1.0",
+  "info" : {
+    "title" : "auth-service",
+    "description" : "Identity and token issuance (ADR-012).\n\nReached through api-gateway at the same paths shown\nhere — the gateway does not rewrite /api/v1.",
+    "version" : "v1"
+  },
+  "servers" : [ {
+    "url" : "/"
+  } ],
+  "tags" : [ {
+    "name" : "jwks",
+    "description" : "Public signing keys for token verification"
+  }, {
+    "name" : "auth",
+    "description" : "Registration, login and token lifecycle"
+  } ],
+  "paths" : {
+    "/api/v1/auth/register" : {
+      "post" : {
+        "tags" : [ "auth" ],
+        "summary" : "Register a new account",
+        "description" : "Creates the account only. No token is issued — see\nPOST /api/v1/auth/login. Email comparison is\ncase-insensitive, so User@x.com and user@x.com are the\nsame account and the second attempt is a 409.",
+        "operationId" : "register",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "201" : {
+            "description" : "Account created",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RegisterResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Validation failed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Email already registered",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh" : {
+      "post" : {
+        "tags" : [ "auth" ],
+        "summary" : "Exchange a refresh token for a new token pair",
+        "description" : "Takes no request body. The refresh token is read from the\nhttpOnly cookie the browser replays automatically, which is\nwhy JavaScript never needs to hold it.\n\nThe presented token is consumed: refresh tokens are\nsingle-use, and presenting one twice is treated as theft.\nThat revokes every token in the family, so the legitimate\nuser is signed out too - the intended trade against an\nattacker keeping a 30-day credential.",
+        "operationId" : "refresh",
+        "parameters" : [ {
+          "name" : "refresh_token",
+          "in" : "cookie",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Rotated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/RefreshResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Unknown, expired, revoked or replayed token - the response does not distinguish them",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login" : {
+      "post" : {
+        "tags" : [ "auth" ],
+        "summary" : "Exchange credentials for tokens",
+        "description" : "Returns a 10-minute access token in the body and a 30-day\nrefresh token as an httpOnly cookie, which JavaScript\ncannot read.\n\nA wrong password and an unknown email produce the SAME 401\nwith the same body, deliberately: any difference between\nthem lets an attacker enumerate which addresses have\naccounts.",
+        "operationId" : "login",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Authenticated",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Invalid credentials",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/jwks.json" : {
+      "get" : {
+        "tags" : [ "jwks" ],
+        "summary" : "JSON Web Key Set",
+        "description" : "Every key gateways should currently accept. Public material\nonly. Cached for 5 minutes; gateways must refresh\nproactively in the background and must NOT fetch on an\nunknown `kid` — a lazy fetch turns a flood of forged `kid`\nvalues into an amplified attack on auth-service (ADR-012).",
+        "operationId" : "jwks",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "type" : "object",
+                  "additionalProperties" : { }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "RegisterRequest" : {
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "type" : "string",
+            "maxLength" : 254,
+            "minLength" : 0
+          },
+          "password" : {
+            "type" : "string",
+            "maxLength" : 128,
+            "minLength" : 12
+          }
+        },
+        "required" : [ "email", "password" ]
+      },
+      "ProblemDetail" : {
+        "type" : "object",
+        "properties" : {
+          "type" : {
+            "type" : "string",
+            "format" : "uri"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "detail" : {
+            "type" : "string"
+          },
+          "instance" : {
+            "type" : "string",
+            "format" : "uri"
+          },
+          "properties" : {
+            "type" : "object",
+            "additionalProperties" : { }
+          }
+        }
+      },
+      "RegisterResponse" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "roles" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            },
+            "uniqueItems" : true
+          }
+        }
+      },
+      "RefreshResponse" : {
+        "type" : "object",
+        "properties" : {
+          "accessToken" : {
+            "type" : "string"
+          },
+          "tokenType" : {
+            "type" : "string"
+          },
+          "expiresIn" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        }
+      },
+      "LoginRequest" : {
+        "type" : "object",
+        "properties" : {
+          "email" : {
+            "type" : "string",
+            "maxLength" : 254,
+            "minLength" : 0
+          },
+          "password" : {
+            "type" : "string",
+            "maxLength" : 128,
+            "minLength" : 0
+          }
+        },
+        "required" : [ "email", "password" ]
+      },
+      "LoginResponse" : {
+        "type" : "object",
+        "properties" : {
+          "accessToken" : {
+            "type" : "string"
+          },
+          "tokenType" : {
+            "type" : "string"
+          },
+          "expiresIn" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "user" : {
+            "$ref" : "#/components/schemas/UserSummary"
+          }
+        }
+      },
+      "UserSummary" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string",
+            "format" : "uuid"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "roles" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            },
+            "uniqueItems" : true
+          }
+        }
+      }
+    }
+  }
+}
