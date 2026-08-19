@@ -1,5 +1,6 @@
 package com.ticketmaster.gateway.jwt;
 
+import com.ticketmaster.gateway.jwt.revocation.RevocationStore;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
@@ -36,13 +37,15 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
 
     private final JwksCache jwks;
     private final JwtValidationProperties properties;
+    private final RevocationStore revocations;
 
     /** Unknown kid -> when it was first seen, purely to keep the log readable. */
     private final Map<String, Instant> unknownKids = new ConcurrentHashMap<>();
 
-    JwtAuthenticationFilter(JwksCache jwks, JwtValidationProperties properties) {
+    JwtAuthenticationFilter(JwksCache jwks, JwtValidationProperties properties, RevocationStore revocations) {
         this.jwks = jwks;
         this.properties = properties;
+        this.revocations = revocations;
     }
 
     /**
@@ -96,6 +99,27 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
                     .build()
                     .parseSignedClaims(header.substring(BEARER.length()))
                     .getPayload();
+
+            // Revocation (ADR-012) - strictly AFTER local signature
+            // validation succeeded above, never a substitute for it. `sub`
+            // is already "user:<uuid>", exactly the revocation topic's key
+            // shape for a whole-user ban; `sid` is read the same way this
+            // token's session id is read anywhere else in the gateway, so
+            // there is exactly one place that knows the claim name.
+            Instant issuedAt = claims.getIssuedAt().toInstant();
+            String subject = claims.getSubject();
+            String sessionId = claims.get("sid", String.class);
+
+            boolean userRevoked = subject != null && revocations.isRevoked(subject, issuedAt);
+            boolean sessionRevoked = sessionId != null
+                    && revocations.isRevoked("session:" + sessionId, issuedAt);
+
+            if (userRevoked || sessionRevoked) {
+                // Same 401 shape as every other JWT rejection below -
+                // revocation is not distinguishable from "bad token" to the
+                // caller, on purpose (see the catch block's own comment).
+                return reject(exchange, HttpStatus.UNAUTHORIZED);
+            }
 
             // The Authorization header is forwarded UNCHANGED rather than
             // stripped and replaced with something like X-User-Id. A trusted

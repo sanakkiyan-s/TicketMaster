@@ -39,6 +39,18 @@ dependencies {
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
+
+    // auth.revocation consumer (ADR-012). Same artifact auth-service already
+    // depends on for its producer side, so both ends of the topic agree on
+    // one Kafka client version rather than picking a second one here.
+    implementation("org.springframework.kafka:spring-kafka")
+
+    // Real broker/consumer semantics (partition assignment, seekToBeginning,
+    // end-offset catch-up, tombstones) are exactly what is worth proving for
+    // the revocation consumer - a mock would let a broken catch-up check
+    // pass silently. Version matches the testcontainers BOM already pinned
+    // at the root for postgresql/junit-jupiter.
+    testImplementation("org.testcontainers:kafka:1.21.4")
 }
 
 // Has a main class now, so the executable jar comes back on - the root build

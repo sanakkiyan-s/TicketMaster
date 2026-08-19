@@ -14,6 +14,14 @@ spring:
       # gateway never takes traffic - with nothing in the log explaining why.
       port: ${REDIS_PORT:6380}
 
+  kafka:
+    # auth.revocation (ADR-012). RevocationConsumer builds its own raw
+    # KafkaConsumer from this bootstrap address rather than a
+    # spring-kafka @KafkaListener container, so it can control the
+    # partition-assign / seek-to-beginning / end-offset sequence needed to
+    # know precisely when it has caught up - see RevocationConsumer.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
   cloud:
     gateway:
       routes:
@@ -112,6 +120,22 @@ gateway:
       - /api/v1/auth/refresh
       - /actuator/health
 
+  revocation:
+    topic: auth.revocation
+    # Prefix only - RevocationConsumer appends a random suffix per JVM so
+    # every instance gets its OWN consumer group (ADR-012) and always
+    # replays the compacted topic from earliest on startup, rather than
+    # resuming a previous instance's committed offset.
+    consumer-group-prefix: api-gateway-revocation
+
+    # An entry only matters while a token issued before revokeBefore could
+    # still be alive. Must match (or exceed) auth-service's access-token
+    # TTL (ADR-012: 10 min default) - the gateway does not currently read
+    # that TTL from anywhere shared, so it is repeated here deliberately;
+    # see the ambiguity note in the PR report.
+    max-token-lifetime: PT10M
+    sweep-interval: PT1M
+
 management:
   endpoints:
     web:
@@ -121,10 +145,18 @@ management:
     health:
       probes:
         enabled: true
-      # readiness only. Adding jwks to liveness would make Kubernetes restart
-      # a gateway that is working perfectly and simply cannot reach
-      # auth-service - turning someone else's outage into a crash loop of our
-      # own (ADR-032).
+      # readiness only. Adding jwks/revocation to liveness would make
+      # Kubernetes restart a gateway that is working perfectly and simply
+      # cannot reach auth-service/Kafka - turning someone else's outage
+      # into a crash loop of our own (ADR-032).
+      #
+      # revocation is a DELIBERATE fail-closed carve-out (ADR-012): unlike
+      # every other readiness dependency in this project, which is
+      # fail-open (degrade routing around it), an instance that cannot
+      # confirm it has caught up on auth.revocation at startup must not
+      # take traffic - serving JWT validation with an empty revocation map
+      # would silently un-revoke every banned account. This is the ONE
+      # named exception; do not "fix" it toward the fail-open default.
       group:
         readiness:
-          include: readinessState,jwks
+          include: readinessState,jwks,revocation
