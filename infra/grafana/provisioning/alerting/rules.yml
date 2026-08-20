@@ -1,0 +1,69 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: outbox
+    folder: TicketMaster
+    interval: 1m
+    rules:
+      - uid: outbox-stalled
+        title: OutboxStalled
+        condition: C
+        for: 5m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Debezium replication lag on {{ $labels.server }} outbox has exceeded 30s for 5+ minutes"
+          description: >-
+            The outbox/Debezium pipeline (currently: auth-service's
+            auth_service_outbox_slot) is falling behind. Revoked
+            sessions/tokens published to the outbox are not reaching
+            Kafka in a timely way. See ADR-015's OutboxStalled definition
+            and RevocationPublisher.java for what depends on this path.
+          runbook_url: ""
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: mimir
+            model:
+              editorMode: code
+              expr: debezium_postgres_connector_metrics_millisecondsbehindsource{context="streaming"}
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: "-100"
+            model:
+              type: threshold
+              refId: C
+              # Grafana's expression node needs `expression` naming the
+              # query to operate on at the top level - the legacy
+              # `conditions[].query.params` alone isn't enough and fails
+              # with "no variable specified to reference for refId C" at
+              # evaluation time (reproduced live 2026-08-20; the rule
+              # provisioned with no error, so this only surfaced once it
+              # actually evaluated).
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    # -1 = Debezium idle (no events since connector
+                    # (re)start), not lag - excluded by this threshold
+                    # since it will always be < 30000 anyway. Real lag is
+                    # a large positive millisecond count. Live-fire
+                    # tested 2026-08-20 via a temporary lower threshold
+                    # (pause+wait doesn't work: Debezium's lag metric
+                    # only recalculates on a new event, so it freezes
+                    # rather than climbs while the connector is paused)
+                    # - confirmed a genuine, non-error "Alerting" state
+                    # with a real evaluated value before restoring this.
+                    params: [30000]
+                  operator:
+                    type: and
+                  query:
+                    params: ["A"]
+                  reducer:
+                    type: last
+                  type: query

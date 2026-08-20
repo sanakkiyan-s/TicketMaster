@@ -27,17 +27,29 @@ export function LoginPage() {
   }
 
   /*
-   * ONE message for every rejection, whatever the server said.
+   * ONE message for every 401, whatever the real cause was.
    *
    * auth-service goes to real trouble here — identical 401 bodies for unknown
-   * email and wrong password, plus a dummy BCrypt verify so the two paths take
-   * the same time. Rendering "no account with that email" would hand back the
-   * account-enumeration oracle the backend just spent that effort closing.
+   * email, wrong password, AND a locked account, plus a dummy BCrypt verify
+   * so the paths take the same time (InvalidCredentialsException's own
+   * javadoc). Rendering "no account with that email" or "this account is
+   * locked" would each hand back an oracle the backend just spent that
+   * effort closing, so 401 stays one generic message no matter which of the
+   * three it actually was.
+   *
+   * 429 (TooManyLoginAttemptsException) is the one status safe to call out
+   * distinctly — it's a per-username attempt counter that increments the
+   * same way for a known and unknown email, so surfacing it confirms only
+   * "this username was guessed at repeatedly," not that an account exists.
+   * The response carries no Retry-After header or body field to build a
+   * countdown from, so the message stays generic about time.
    */
   const formError = login.isError
     ? login.error.status === 401
       ? "That email and password combination is not correct."
-      : (login.error.message ?? "Something went wrong. Please try again.")
+      : login.error.status === 429
+        ? "Too many sign-in attempts. Please wait a while before trying again."
+        : (login.error.message ?? "Something went wrong. Please try again.")
     : null
 
   return (

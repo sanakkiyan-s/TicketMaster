@@ -1,6 +1,8 @@
 package com.ticketmaster.gateway.jwt;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ticketmaster.gateway.jwt.revocation.RevocationEntry;
+import com.ticketmaster.gateway.jwt.revocation.RevocationStore;
 import io.jsonwebtoken.Jwts;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -84,25 +86,36 @@ class JwtAuthenticationFilterTest {
     }
 
     private String token(String kid, KeyPair signer, Instant issuedAt, Duration lifetime) {
-        return Jwts.builder()
+        return token(kid, signer, issuedAt, lifetime, "user:abc", null);
+    }
+
+    private String token(String kid, KeyPair signer, Instant issuedAt, Duration lifetime,
+            String subject, String sessionId) {
+        var builder = Jwts.builder()
                 .header().keyId(kid).and()
                 .issuer(ISSUER)
                 .audience().add(AUDIENCE).and()
-                .subject("user:abc")
+                .subject(subject)
                 .issuedAt(Date.from(issuedAt))
-                .expiration(Date.from(issuedAt.plus(lifetime)))
-                .signWith(signer.getPrivate(), Jwts.SIG.RS256)
-                .compact();
+                .expiration(Date.from(issuedAt.plus(lifetime)));
+        if (sessionId != null) {
+            builder.claim("sid", sessionId);
+        }
+        return builder.signWith(signer.getPrivate(), Jwts.SIG.RS256).compact();
     }
 
     private HttpStatus statusFor(JwksCache cache, String authorization, String path) {
+        return statusFor(cache, authorization, path, new RevocationStore());
+    }
+
+    private HttpStatus statusFor(JwksCache cache, String authorization, String path, RevocationStore revocations) {
         MockServerHttpRequest.BaseBuilder<?> builder = MockServerHttpRequest.get(path);
         if (authorization != null) {
             builder.header(HttpHeaders.AUTHORIZATION, authorization);
         }
         MockServerWebExchange exchange = MockServerWebExchange.from(builder.build());
 
-        new JwtAuthenticationFilter(cache, properties())
+        new JwtAuthenticationFilter(cache, properties(), revocations)
                 .filter(exchange, e -> Mono.empty())
                 .block();
 
@@ -231,7 +244,7 @@ class JwtAuthenticationFilterTest {
 
         AtomicReference<HttpHeaders> forwarded = new AtomicReference<>();
 
-        new JwtAuthenticationFilter(cache, properties())
+        new JwtAuthenticationFilter(cache, properties(), new RevocationStore())
                 .filter(exchange, e -> {
                     forwarded.set(e.getRequest().getHeaders());
                     return Mono.empty();
@@ -240,5 +253,53 @@ class JwtAuthenticationFilterTest {
 
         assertEquals(bearer, forwarded.get().getFirst(HttpHeaders.AUTHORIZATION));
         assertTrue(forwarded.get().containsKey("X-Request-Subject"));
+    }
+
+    @Test
+    void aUserRevocationRejectsATokenIssuedBeforeRevokeBefore() {
+        StubCache cache = new StubCache(Map.of("k1", keyPair.getPublic()), true);
+        RevocationStore revocations = new RevocationStore();
+        Instant revokeBefore = Instant.now();
+        revocations.apply("user:banned", new RevocationEntry(revokeBefore, "fraud"));
+
+        String tokenIssuedBeforeBan = token("k1", keyPair,
+                revokeBefore.minus(Duration.ofMinutes(1)), Duration.ofMinutes(10), "user:banned", null);
+
+        assertEquals(HttpStatus.UNAUTHORIZED,
+                statusFor(cache, "Bearer " + tokenIssuedBeforeBan, "/api/v1/events", revocations));
+    }
+
+    @Test
+    void aUserRevocationAllowsATokenIssuedAfterRevokeBefore() {
+        // A fresh login/refresh minted after the ban must keep working -
+        // otherwise a banned-then-unbanned user could never log back in.
+        StubCache cache = new StubCache(Map.of("k1", keyPair.getPublic()), true);
+        RevocationStore revocations = new RevocationStore();
+        Instant revokeBefore = Instant.now();
+        revocations.apply("user:banned", new RevocationEntry(revokeBefore, "fraud"));
+
+        String tokenIssuedAfterBan = token("k1", keyPair,
+                revokeBefore.plus(Duration.ofMinutes(1)), Duration.ofMinutes(10), "user:banned", null);
+
+        assertEquals(HttpStatus.OK,
+                statusFor(cache, "Bearer " + tokenIssuedAfterBan, "/api/v1/events", revocations));
+    }
+
+    @Test
+    void aSessionRevocationRejectsOnlyThatSession() {
+        StubCache cache = new StubCache(Map.of("k1", keyPair.getPublic()), true);
+        RevocationStore revocations = new RevocationStore();
+        Instant revokeBefore = Instant.now();
+        revocations.apply("session:device-1", new RevocationEntry(revokeBefore, "logged out remotely"));
+
+        String loggedOutSession = token("k1", keyPair,
+                revokeBefore.minus(Duration.ofMinutes(1)), Duration.ofMinutes(10), "user:abc", "device-1");
+        String otherSessionSameUser = token("k1", keyPair,
+                revokeBefore.minus(Duration.ofMinutes(1)), Duration.ofMinutes(10), "user:abc", "device-2");
+
+        assertEquals(HttpStatus.UNAUTHORIZED,
+                statusFor(cache, "Bearer " + loggedOutSession, "/api/v1/events", revocations));
+        assertEquals(HttpStatus.OK,
+                statusFor(cache, "Bearer " + otherSessionSameUser, "/api/v1/events", revocations));
     }
 }

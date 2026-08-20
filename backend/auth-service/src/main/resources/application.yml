@@ -17,6 +17,19 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:ticketmaster}
     username: ${DB_USER:ticketmaster}
     password: ${DB_PASSWORD:ticketmaster}
+    hikari:
+      # Spring Boot's own default (1 = fail on the very first connection
+      # attempt, no retry) means a single transient DNS/network blip during
+      # container startup crashes the whole service instead of the pool
+      # just trying again - reproduced live 2026-08-20 recovering this
+      # stack after a Docker Desktop restart: auth-service's heavier
+      # startup (Kafka/Vault/Redis clients all initializing alongside JDBC)
+      # hit exactly this window repeatedly while user-service, with a
+      # lighter startup, never did. 30s gives the pool room to retry
+      # through a brief resolution hiccup without masking a real outage -
+      # Flyway/actuator readiness still fails loudly if Postgres is
+      # actually down for that whole window.
+      initialization-fail-timeout: 30000
 
   jpa:
     hibernate:
@@ -29,7 +42,36 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
+  data:
+    redis:
+      # Same cluster/instance the gateway uses (ADR-004) - one shared
+      # Redis, not a second one per service. 6380, not the default 6379:
+      # see api-gateway's application.yml for why.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
+
 auth:
+  login-security:
+    # The account-abuse control described in wiki/projects/api-gateway.md:
+    # tight and username-keyed, sitting behind the gateway's loose
+    # IP-keyed volumetric shield. Deliberately separate from that limiter
+    # - a shared IP (NAT/corporate/library) must never cost a legitimate
+    # user their own login budget, which is exactly what an IP-only limit
+    # would do.
+    #
+    # Two-window Redis design (ADR-040), replacing a DB-persisted counter
+    # that never decayed.
+    fast-window-limit: 5
+    fast-window-ttl: PT1M
+    # Catches an attacker who paces guesses just under the fast window's
+    # rate to avoid it - self-decaying via TTL, unlike the old
+    # failed_login_attempts column, so a legitimate user's occasional
+    # mistypes days apart no longer accumulate toward a lock forever.
+    slow-window-limit: 15
+    slow-window-ttl: PT24H
+    lock-duration: PT15M
+
+
   jwt:
     # `iss` and `aud` are matched by the gateway, so they are configuration
     # rather than constants — the same build runs in every environment and must
@@ -63,6 +105,18 @@ auth:
       # Lets a fresh local Vault work with no manual seeding. Never in
       # production: it means the service will mint its own signing key.
       bootstrap-if-empty: ${JWT_VAULT_BOOTSTRAP:false}
+
+    rotation:
+      # ADR-012's real production numbers. Tests override these to a few
+      # milliseconds via @DynamicPropertySource rather than waiting on
+      # real minutes - see RotationOrchestratorTest.
+      publish-duration: PT15M
+      drain-duration: PT30M
+      # How often RotationScheduler checks whether the current phase's
+      # minimum duration has elapsed. Well under publish-duration so a
+      # phase does not run meaningfully longer than configured before the
+      # scheduler notices.
+      scheduler-interval: PT2M
 
   refresh-cookie:
     # Secure means the browser never sends it over plaintext HTTP. True by

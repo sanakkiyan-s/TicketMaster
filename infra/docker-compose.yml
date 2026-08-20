@@ -8,6 +8,12 @@ services:
   # --- Postgres / Citus (ADR-005) ---------------------------------
   postgres-coordinator:
     image: citusdata/citus:12.1
+    # wal_level=logical is required by Debezium's Postgres connector
+    # (ADR-007) - it reads a logical replication slot off the WAL, which
+    # does not exist at the default wal_level=replica. Only the
+    # coordinator needs it: the outbox table Debezium tails lives there,
+    # not on the workers.
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-ticketmaster}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketmaster}
@@ -107,17 +113,47 @@ services:
 
   # Kafka Connect + Debezium (Transactional Outbox source, ADR-007)
   kafka-connect:
-    image: debezium/connect:2.7.3.Final
+    # Built, not the plain debezium/connect image directly - adds the JMX
+    # Prometheus exporter javaagent (infra/jmx-exporter/) so Debezium's
+    # real MilliSecondsBehindSource metric is scrapeable (ADR-015). No
+    # other change from the base image.
+    build:
+      context: ../infra/jmx-exporter
     environment:
+      # Attaches the exporter without needing debezium/connect's own
+      # entrypoint script to know anything about it - KAFKA_OPTS is
+      # picked up by the underlying Kafka launch scripts this image
+      # already uses.
+      KAFKA_OPTS: -javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent.jar=9404:/opt/jmx-exporter/config.yaml
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: ticketmaster-connect
       CONFIG_STORAGE_TOPIC: connect_configs
       OFFSET_STORAGE_TOPIC: connect_offsets
       STATUS_STORAGE_TOPIC: connect_statuses
-      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
-      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
-      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      # Plain debezium/connect does not bundle Confluent's Avro converter
+      # (io.confluent.connect.avro.AvroConverter) - that class only ships
+      # inside Confluent's own cp-kafka-connect image. Pointing the
+      # worker at it here crash-loops on startup before any connector
+      # ever registers. Nothing in this project produces Avro-schema
+      # data yet, so JSON (schemas disabled) is the correct worker
+      # default, not a workaround - auth-outbox-connector.json overrides
+      # per-connector anyway (String key / JSON value) to match
+      # RevocationConsumer's plain KafkaConsumer<String,String>.
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      # Worker-level defaults above stay Avro for connectors that want
+      # schema-registry-backed serde. auth-outbox-connector.json overrides
+      # both to plain string/JSON per-connector (RevocationConsumer is a
+      # raw KafkaConsumer<String,String>, not Avro-aware) - that override
+      # only resolves if the worker exposes a config provider for the
+      # ${env:...} DB credential placeholders used in that file.
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      POSTGRES_USER: ${POSTGRES_USER:-ticketmaster}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketmaster}
+      POSTGRES_DB: ${POSTGRES_DB:-ticketmaster}
     ports:
       - "8083:8083"
     depends_on:
@@ -135,6 +171,220 @@ services:
       VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
     ports:
       - "8200:8200"
+
+  # --- Backend services (ADR-036 Phase 1) --------------------------
+  # Gated behind the "backend" profile: `docker compose up` (the infra
+  # command dev.sh already runs) never starts these unless asked, since
+  # most work on infra alone doesn't need a multi-minute Gradle image
+  # build. `docker compose --profile backend up` (dev.sh's `backend`
+  # command) does. Host ports match each service's own application.yml
+  # default (8080/8081/8082); in-network hostnames/ports below are the
+  # compose service name and the CONTAINER port, not the host-published
+  # one - api-gateway's REDIS_PORT default of 6380 and
+  # KAFKA_BOOTSTRAP_SERVERS default of :29092 are host-side workarounds
+  # for a locally-installed Redis/Kafka and do not apply from inside
+  # this network, where redis:6379 and kafka:9092 are unambiguous.
+  auth-service:
+    profiles: ["backend"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        MODULE: auth-service
+    environment:
+      DB_HOST: postgres-coordinator
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      VAULT_URI: http://vault:8200
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      JWT_KEY_SOURCE: vault
+      JWT_VAULT_BOOTSTRAP: "true"
+      OTEL_SERVICE_NAME: auth-service
+    ports:
+      # Host side moved off 8081: an unrelated project
+      # (stockz11-mongo-express) already owns host:8081, discovered live
+      # 2026-08-20 - port stays 8081 inside the container and on the
+      # compose network (AUTH_SERVICE_URI/JWKS_URI below still point at
+      # auth-service:8081), only the host-facing port changes. 8083 was
+      # also taken (kafka-connect's own REST port), landed on 8180.
+      - "8180:8081"
+    depends_on:
+      postgres-coordinator:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_started
+      kafka:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  api-gateway:
+    profiles: ["backend"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        MODULE: api-gateway
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      AUTH_SERVICE_URI: http://auth-service:8081
+      JWKS_URI: http://auth-service:8081/.well-known/jwks.json
+      USER_SERVICE_URI: http://user-service:8082
+      OTEL_SERVICE_NAME: api-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      auth-service:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  user-service:
+    profiles: ["backend"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        MODULE: user-service
+    environment:
+      DB_HOST: postgres-coordinator
+      DB_PORT: "5432"
+      OTEL_SERVICE_NAME: user-service
+    ports:
+      # Host 8082 is already schema-registry's (see above) - only the
+      # host-side mapping changes, the container's own port stays 8082
+      # (its application.yml default), so nothing in the service's own
+      # config needs to know about this.
+      - "8090:8082"
+    depends_on:
+      postgres-coordinator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # --- Observability (ADR-015) ---------------------------------------
+  # Gated behind the "observability" profile, same reasoning as
+  # "backend": `docker compose up` never pays for 7 extra containers
+  # unless asked. `docker compose --profile observability up`
+  # (dev.sh's `observability` command) does. Filesystem storage for
+  # Tempo/Loki/Mimir, not MinIO/S3 - see infra/tempo/tempo.yaml's header
+  # for why.
+  otel-collector:
+    profiles: ["observability"]
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    command: ["--config=/etc/otel-collector/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otel-collector/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+
+  tempo:
+    profiles: ["observability"]
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"
+
+  loki:
+    profiles: ["observability"]
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+
+  mimir:
+    profiles: ["observability"]
+    image: grafana/mimir:2.14.0
+    command: ["-config.file=/etc/mimir/mimir.yaml"]
+    volumes:
+      - ./mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
+      - mimir_data:/data
+    ports:
+      - "9009:8080"
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.55.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--enable-feature=agent"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      mimir:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+
+  # The exporter ADR-004 already assumes and ADR-015 explicitly requires
+  # preserving. Watches the single local Redis instance - the ADR-004
+  # StatefulSet/reshard-controller design is k8s/cluster-specific and out
+  # of scope until Redis actually clusters.
+  redis-exporter:
+    profiles: ["observability"]
+    image: oliver006/redis_exporter:v1.66.0
+    environment:
+      REDIS_ADDR: redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      mimir:
+        condition: service_started
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
 
   # --- MinIO (S3-compatible object storage, ADR-017) ---
   minio:
@@ -158,3 +408,7 @@ volumes:
   pg_coordinator_data:
   pg_worker1_data:
   minio_data:
+  tempo_data:
+  loki_data:
+  mimir_data:
+  grafana_data:

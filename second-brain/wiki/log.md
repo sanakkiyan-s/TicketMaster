@@ -1146,3 +1146,156 @@ token proxied through to auth-service.
   table or Debezium connector exists yet. Until then a revoked refresh family
   does not invalidate already-issued access tokens for up to 10 minutes.
 - Rate limiting (ADR-014) not wired, though the Redis dependency is present.
+
+## 2026-08-19 (gateway rate limiting)
+
+### Decided
+- **Login/register rate limits, concrete numbers for the first time.**
+  ADR-014 named rate limiting as part of the anti-bot posture but specified no
+  values. Login: 10 requests/minute per IP. Register: 5/minute per IP -
+  starting defaults, not measured against real traffic, same honesty as
+  ADR-012's token lifetimes. Login is looser than a typical brute-force guard
+  because a shared corporate/NAT IP or a typo-prone user must not get locked
+  out; it is defense in depth on top of BCrypt(12)'s ~250ms cost and the
+  byte-identical 401 already closing account enumeration, not the only
+  control.
+- **Hand-rolled fixed-window Redis filter, not Spring Cloud Gateway's
+  RequestRateLimiter.** The built-in RedisRateLimiter's config is integer
+  requests-PER-SECOND; "10 per minute" is not representable without either
+  truncating to 0 (disables the limiter entirely) or a requestedTokens hack.
+  A four-line Lua script (INCR, EXPIRE on first hit, return TTL) gives exact
+  per-minute control and is easy to test deterministically - assert the Nth
+  request is the boundary, rather than reasoning about token-bucket timing.
+- **Keyed by IP, never by header.** X-Forwarded-For is attacker-controlled on
+  any request that reaches this filter directly; trusting it would let a
+  client rotate the header per request and never be throttled. The socket
+  address is used until a real proxy sits in front (ADR-019), at which point
+  this needs a trusted-proxy allowlist, not blind trust of the header.
+- **Fails OPEN on a Redis outage**, not closed. Rate limiting is one layer
+  among several; losing it during an outage narrows defense in depth. Failing
+  closed here would mean a Redis blip locks every user out of logging in at
+  all - the same shape of mistake ADR-012 explicitly rejected for the
+  revocation map, applied to a second control.
+
+### Added
+- `gateway/ratelimit/` - `RateLimitRule`, `RateLimitProperties`,
+  `RateLimitFilter`, `scripts/rate_limit.lua`.
+- `RateLimitFilterTest` - 6 tests against a real Redis container: exact
+  boundary (Nth request), independent per-IP counters, unrelated paths never
+  throttled, window reset after real expiry, fail-open on a broken Redis
+  connection.
+
+### Notes
+- Runs BEFORE JwtAuthenticationFilter (order +50 vs +100): a flooding client
+  is turned away before token-parsing work runs at all, not after.
+- Response carries `X-RateLimit-Limit` / `X-RateLimit-Remaining` on every
+  request, not just the 429 - lets a well-behaved client back off proactively
+  rather than discovering the limit by hitting it.
+- Fixed window accepts a known imprecision: up to 2x the limit can pass right
+  at a window boundary (a burst just before + just after). Documented as an
+  accepted trade for this being an anti-abuse control, not a hard security
+  boundary - the byte-identical 401 and BCrypt cost do the precise work.
+- Verified live through :8080, not just green tests: 10 login attempts pass,
+  the 11th returns 429 with an accurate Retry-After; register's limit is
+  independent and still admits its own request; /api/v1/events (no rule
+  configured) is never touched by either limiter.
+- 54 tests green across the whole repo; ./gradlew build passes on all 15
+  modules.
+
+## 2026-08-20
+
+### Added
+- Full [[ADR-015-observability-stack]] infra pipeline, built and verified
+  live: `otel-collector`, `tempo`, `loki`, `mimir`, `prometheus` (agent
+  mode), `redis-exporter`, `grafana`, all gated behind a new
+  `observability` compose profile. OTel Java agent wired into
+  `backend/Dockerfile` (shared by all 3 services, no per-service code).
+  Grafana datasources (Mimir/Tempo/Loki, with exemplar/derived-field
+  correlation), one dashboard (`TicketMaster - Service Overview`), one
+  alert rule (`OutboxStalled`).
+- JMX Prometheus exporter on kafka-connect's own image
+  (`infra/jmx-exporter/`) — makes Debezium's real replication-lag metric
+  scrapeable.
+- `spring.datasource.hikari.initialization-fail-timeout: 30000` in both
+  auth-service's and user-service's `application.yml` — Spring Boot's own
+  default (1 = fail on first connection attempt, zero retry) turned a
+  transient startup-window DNS blip into a hard crash-loop.
+
+### Fixed (real bugs, found live)
+- auth-service's repeated post-restart crash-loop was not actually a DNS
+  problem — it was the Hikari zero-retry default above, surfaced reliably
+  by auth-service's heavier concurrent startup (Kafka/Vault/Redis clients
+  alongside JDBC) vs. user-service's lighter one.
+- Once that was fixed, the *real* auth-service failure was a host-port
+  collision: an unrelated local project already held host `8081` (and
+  `8083` was independently taken by kafka-connect's own REST port).
+  Remapped auth-service's host mapping to `8180:8081` in
+  `infra/docker-compose.yml` — container-internal port and all in-network
+  URLs (`AUTH_SERVICE_URI`, `JWKS_URI`) unaffected.
+- jmx_exporter Dockerfile: pinned release version (1.0.1) didn't exist
+  (404) — corrected to the real latest, 1.6.0. Separately, `ADD --chmod=`
+  on a URL that implicitly creates its parent directory applies that same
+  restrictive mode to the directory too, stripping the execute/search bit
+  — fixed by doing the copy as `root` and `chmod`ing the directory
+  (755) separately from the files (644), then restoring the original
+  non-root `kafka` user.
+- Mimir's ingester/store-gateway rings default to `replication_factor: 3`
+  — with one process, every write and every read failed outright ("at
+  least 2 live replicas required" / "too many unhealthy instances in the
+  ring") until `infra/mimir/mimir.yaml` explicitly set
+  `replication_factor: 1` on both rings.
+
+### Decisions
+- Single-Collector topology instead of ADR-015's literal two-tier
+  agent/gateway split — the two-tier design exists for tail-sampling at
+  horizontal scale, irrelevant at 3-service/single-host scale. Every
+  service points at "the collector" via one env var, so this is a
+  topology change later, not an app change.
+- Filesystem storage (not MinIO/S3) for Tempo/Loki/Mimir, even though
+  MinIO already runs for other purposes — each tool's documented simplest
+  local mode, avoids S3 path-style/bucket-policy config risk for no real
+  benefit at this scale.
+
+### Changed
+- `second-brain/wiki/projects/infra.md` — was badly stale ("Not started,
+  empty directory" as of 2026-08-05); rewritten against actual
+  `docker-compose.yml` state.
+- `second-brain/wiki/concepts/cross-cutting-concerns.md`'s tracing
+  section — resolved from "tooling not yet decided" to ADR-015; also
+  corrected a factual error found while updating it: the originally
+  planned custom correlation-ID-at-the-gateway mechanism was never
+  actually implemented (`backend/api-gateway/src` has no correlation-ID
+  code) and is superseded by OTel's own `traceparent` propagation.
+
+### Resolved Questions
+- Tracing tool choice (was open in `cross-cutting-concerns.md`) —
+  resolved by [[ADR-015-observability-stack]]: OpenTelemetry + Tempo/
+  Loki/Mimir.
+- `OutboxStalled` alert rule live-fire status — was open, now resolved:
+  actually live-fire tested (see below), not just config-checked.
+
+### Fixed (real bugs, found live, cont.)
+- The originally-planned live-fire method (pause the connector, generate
+  an outbox event, wait) doesn't work: Debezium's
+  `MilliSecondsBehindSource` only recalculates on a new event, so it
+  freezes at its last value while paused instead of climbing — verified
+  via the raw JMX exporter output, unchanged across a pause+event+wait
+  cycle.
+- Real test method used instead (temporarily lower the alert threshold
+  below the current real value): uncovered that Grafana's threshold
+  expression node needs a top-level `expression: A` field naming the
+  query — `conditions[].query.params` alone isn't enough. Without it the
+  rule provisions with no error but fails at evaluation time
+  (`"failed to parse expression 'C': no variable specified to reference
+  for refId C"`), and Grafana's default `execErrState: Alerting` makes
+  the broken rule look like a false-positive fire. Fixed in
+  `infra/grafana/provisioning/alerting/rules.yml`; after the fix the
+  alert was confirmed to reach a genuine `Alerting` state with a real
+  evaluated value, then reverted cleanly to `inactive` once the
+  threshold was restored to 30000.
+
+### Opened Questions
+- Docker Desktop restarted spontaneously twice during this session
+  (unrelated to any command run), taking the whole stack down each time.
+  Not investigated further — outside this session's scope — but worth
+  knowing this environment does that.

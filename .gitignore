@@ -19,6 +19,9 @@ bin/
 .project
 .settings/
 
+# Claude Code local tool state - not project source.
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -37,3 +40,7 @@ dist/
 
 # Vault dev data
 infra/vault/data/
+
+# scripts/dev.sh's own bookkeeping for backend processes it launched
+# (PID files, per-service log files) - never anything worth committing.
+.dev/

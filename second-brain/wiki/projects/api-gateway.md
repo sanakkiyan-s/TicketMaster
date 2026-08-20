@@ -2,9 +2,9 @@
 title: api-gateway
 type: project
 sources: []
-related: [[system-overview]], [[auth-service]]
+related: [[system-overview]], [[auth-service]], [[ADR-039-dual-tier-login-rate-limiting]]
 created: 2026-08-05
-last-updated: 2026-08-14
+last-updated: 2026-08-19
 ---
 
 ## Purpose
@@ -14,8 +14,47 @@ services, validates auth tokens at the edge, applies rate limiting.
 
 ## Current Implementation
 
-Not started. `backend/api-gateway` holds only `build.gradle.kts` — no
-`application.yml`, no filter beans, no routes (verified 2026-08-14).
+**Wrong as of 2026-08-19: this said "Not started" while
+`JwtAuthenticationFilter`, routing, rate limiting, and a Kafka revocation
+consumer all already existed.** Verified against `backend/api-gateway/src/`:
+
+- `jwt/JwtAuthenticationFilter` — local JWKS-cached signature validation,
+  then (post-signature) the revocation check below. Rejects with one
+  consistent 401 shape for every JWT failure — bad signature, expired,
+  unknown kid, and revoked all look identical to the caller.
+- `jwt/JwksCache` — background-refreshed public-key cache; the unknown-kid
+  emergency-refetch backstop from [[ADR-012-jwt-lifecycle]].
+- `jwt/revocation/` — `RevocationConsumer` (raw `KafkaConsumer` on its own
+  thread, `assign()`+`seekToBeginning`+`endOffsets` comparison to
+  precisely detect startup catch-up rather than approximate it),
+  `RevocationStore` (the in-memory map), `RevocationCleanupScheduler`
+  (TTL tombstoning), `RevocationHealthIndicator` (readiness fails closed
+  until caught up — [[ADR-012-jwt-lifecycle]]'s named exception to this
+  project's usual fail-open convention; a later mid-flight Kafka
+  disconnect does NOT flip readiness back down, it logs and keeps serving
+  the last-known map). Single-region only — ADR-012's cross-region
+  MirrorMaker amendment is not built. **Verified live, 2026-08-19**: a
+  real `logout-everywhere` call flowed through the outbox → Debezium →
+  `auth.revocation` → this consumer → a stale token rejected at
+  `JwtAuthenticationFilter` with 401, a post-revocation token unaffected
+  — see [[auth-service]] for the three infra bugs that surfaced and were
+  fixed to get there.
+- `ratelimit/RateLimitConfig` — the `ipKeyResolver` bean backing
+  route-level `RequestRateLimiter` filters on login/register (see below).
+- `application.yml` — routes for auth-service (including the
+  login/register-specific rate-limited routes), Kafka bootstrap config,
+  readiness probe group including both `jwks` and `revocation`.
+
+**Verification status**: `./gradlew :backend:api-gateway:test` green as
+of 2026-08-19 (24 tests spanning filter, rate-limit-store, and
+Kafka-Testcontainers revocation suites).
+
+**Containerized**: runs via `docker compose --profile backend up` (see
+`backend/Dockerfile`, `infra/docker-compose.yml`), host port 8080.
+Verified live 2026-08-19: container reports healthy,
+`GET /actuator/health` 200, and a live `POST /api/v1/auth/register`
+proxied correctly to auth-service's container over the compose
+network.
 
 ## Target Design
 
@@ -63,15 +102,14 @@ Responsibilities:
 - JWT validation done **locally** — signature check against a cached JWKS
   public key, not a network call to auth-service per request. auth-service
   still owns issuance/refresh; the gateway only verifies.
-- **Business-aware rate limiting** — Spring Cloud Gateway's
-  `RequestRateLimiter`, Redis-backed, keyed by `userId:endpoint` (not IP).
-  Runs a Lua script in Redis (token-bucket: read remaining tokens,
-  decrement, write, all as one atomic op) — same reason
-  [[ADR-002-seat-locking-strategy]]'s seat-lock uses an atomic Redis op
-  instead of separate GET-then-SET: without atomicity, two concurrent
-  requests can both read the same token count before either writes,
-  letting more through than the limit allows. `RequestRateLimiter` ships
-  this Lua script built in — not hand-rolled.
+- **Business-aware rate limiting for authenticated routes** — Spring
+  Cloud Gateway's `RequestRateLimiter`, Redis-backed, keyed by
+  `userId:endpoint` (not IP). `RequestRateLimiter` ships its own atomic
+  Redis Lua script for the token-bucket read-decrement-write — not
+  hand-rolled — same reason [[ADR-002-seat-locking-strategy]]'s seat-lock
+  uses an atomic Redis op instead of separate GET-then-SET: without
+  atomicity, two concurrent requests can both read the same token count
+  before either writes, letting more through than the limit allows.
   Example limits: `user-42:POST /api/bookings` -> 5/min (expensive,
   abuse-prone), `user-42:GET /api/events` -> 100/min (cheap, browsing).
   Contrast with Nginx's `limit_req_zone`, which only keys off IP — can't
@@ -90,6 +128,20 @@ Responsibilities:
   instead of one bucket assumed to fit every caller. Anonymous/`USER`
   buckets stay the tightest tier — unauthenticated and regular-buyer
   traffic is exactly the abuse surface this limiter exists for.
+
+  **`/api/v1/auth/login` and `/api/v1/auth/register` are the one gap this
+  scheme has no answer for** — there is no `userId` yet at the point
+  credentials are being exchanged. [[ADR-039-dual-tier-login-rate-limiting]]
+  resolves it with a second, independent layer: the gateway runs a loose,
+  IP-keyed `RequestRateLimiter` on these two routes specifically
+  (`RateLimitConfig.ipKeyResolver`, `auth-service-login`/
+  `auth-service-register` routes in `application.yml` — 60/min and 20/min),
+  purely as a volumetric shield against floods, since the gateway cannot
+  safely buffer the request body to key by username without breaking its
+  streaming WebFlux/Netty design. The tight, per-account defense (5 failed
+  attempts/min by username, then a DB-backed 15-minute lockout after 10)
+  lives entirely in auth-service's `LoginAttemptLimiter`, where the body
+  has already been parsed — see [[auth-service]].
 - Correlation ID injection (per [[cross-cutting-concerns]]).
 - Circuit breakers (Resilience4j) around downstream service calls.
 - CORS handling.
@@ -97,4 +149,10 @@ Responsibilities:
 
 ## Gap
 
-Everything.
+Also wrong until 2026-08-19 (see above). Real remaining gaps: routing
+only covers auth-service so far, not the other 13 backend services (none
+of them have code yet, so nothing to route to). Circuit breakers
+(Resilience4j) mentioned in Responsibilities above are not implemented.
+Cross-region revocation mirroring (ADR-012's amendment) is single-region
+only for now. CORS handling not yet configured. Correlation-ID injection
+not yet implemented.

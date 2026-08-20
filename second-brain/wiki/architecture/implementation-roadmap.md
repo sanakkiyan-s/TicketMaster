@@ -211,8 +211,9 @@ Decisions. **Backup**: EBS snapshot + WAL prod / pgBackRest local
    (ADR-031)
 8. Auth: JWT validation via gRPC metadata (ADR-009/ADR-023) or gateway-
    forwarded assertion
-9. Validation, error handling, structured logging with correlation ID
-   (cross-cutting-concerns.md)
+9. Validation, error handling, structured logging with the OTel
+   trace_id (agent-attached automatically, see [[ADR-015-observability-stack]]
+   and cross-cutting-concerns.md)
 10. External integrations (Stripe for payment-service, S3 for media-
     service, FCM for notification-service) last, once internal logic
     is proven

@@ -1,6 +1,11 @@
 package com.ticketmaster.auth.shared;
 
+import com.ticketmaster.auth.jwt.ForbiddenException;
+import com.ticketmaster.auth.jwt.InvalidBearerTokenException;
+import com.ticketmaster.auth.jwt.rotation.RotationInProgressException;
+import com.ticketmaster.auth.jwt.rotation.RotationNotSupportedException;
 import com.ticketmaster.auth.login.InvalidCredentialsException;
+import com.ticketmaster.auth.login.TooManyLoginAttemptsException;
 import com.ticketmaster.auth.registration.EmailAlreadyRegisteredException;
 import com.ticketmaster.auth.token.InvalidRefreshTokenException;
 import org.springframework.http.HttpStatus;
@@ -63,6 +68,19 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * 429, safe to distinguish from the 401 above - see
+     * TooManyLoginAttemptsException's own javadoc for why this one
+     * doesn't reopen the enumeration hole InvalidCredentialsException's
+     * identical-401 handling exists to close.
+     */
+    @ExceptionHandler(TooManyLoginAttemptsException.class)
+    public ProblemDetail handleTooManyLoginAttempts(TooManyLoginAttemptsException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.TOO_MANY_REQUESTS);
+        problem.setTitle("Too many login attempts");
+        return problem;
+    }
+
+    /**
      * One 401 for every refresh failure - unknown, expired, revoked, replayed.
      *
      * The exception carries a reason for the logs; the response carries none.
@@ -73,6 +91,51 @@ public class ApiExceptionHandler {
     public ProblemDetail handleInvalidRefreshToken(InvalidRefreshTokenException e) {
         ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
         problem.setTitle("Invalid credentials");
+        return problem;
+    }
+
+    /**
+     * 401 for every rejected bearer token on the admin/self-service
+     * revocation and rotation endpoints - unknown kid, bad signature,
+     * wrong issuer/audience, expired, or a missing/malformed header.
+     * Deliberately no detail in the response, same rationale as
+     * InvalidRefreshTokenException: which specific check failed is logged
+     * server-side, not handed to whoever presented the token.
+     */
+    @ExceptionHandler(InvalidBearerTokenException.class)
+    public ProblemDetail handleInvalidBearerToken(InvalidBearerTokenException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+        problem.setTitle("Invalid credentials");
+        return problem;
+    }
+
+    /**
+     * 403 - the token verified but its `roles` claim lacks ADMIN
+     * (ADR-030). Distinct from the 401 above: the caller IS authenticated,
+     * they just aren't authorized for this action.
+     */
+    @ExceptionHandler(ForbiddenException.class)
+    public ProblemDetail handleForbidden(ForbiddenException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
+        problem.setTitle("Forbidden");
+        return problem;
+    }
+
+    /** 409 - another rotation is already running; the caller must wait or check status first. */
+    @ExceptionHandler(RotationInProgressException.class)
+    public ProblemDetail handleRotationInProgress(RotationInProgressException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        problem.setTitle("Rotation already in progress");
+        problem.setDetail(e.getMessage());
+        return problem;
+    }
+
+    /** 409 - key rotation was requested while running with the ephemeral (non-Vault) key source. */
+    @ExceptionHandler(RotationNotSupportedException.class)
+    public ProblemDetail handleRotationNotSupported(RotationNotSupportedException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        problem.setTitle("Key rotation not supported");
+        problem.setDetail(e.getMessage());
         return problem;
     }
 

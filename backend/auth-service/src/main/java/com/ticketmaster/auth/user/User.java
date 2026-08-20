@@ -3,6 +3,7 @@ package com.ticketmaster.auth.user;
 import jakarta.persistence.*;
 import lombok.Getter;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
@@ -52,6 +53,14 @@ public class User {
     @Column(name = "role", nullable = false)
     private Set<String> roles = new HashSet<>();
 
+    /**
+     * The persistent side of ADR-040's login lockout: LoginAttemptLimiter
+     * decides WHEN to trip (its Redis fast/slow windows), this is the one
+     * DB write that follows, surviving past either Redis window's own TTL.
+     */
+    @Column(name = "locked_until")
+    private Instant lockedUntil;
+
     protected User() {
         // JPA
     }
@@ -70,5 +79,29 @@ public class User {
      */
     public Set<String> getRoles() {
         return Set.copyOf(roles);
+    }
+
+    public boolean isLocked(Instant now) {
+        return lockedUntil != null && lockedUntil.isAfter(now);
+    }
+
+    /**
+     * Called once LoginAttemptLimiter's Redis windows (ADR-040) report
+     * either threshold crossed by the current failure - not on every
+     * failed attempt, only the one that trips it. That is the whole
+     * point of moving counting to Redis: this is the single DB write per
+     * lock cycle, not one per attempt.
+     */
+    public void lock(Instant now, Duration lockDuration) {
+        this.lockedUntil = now.plus(lockDuration);
+        this.updatedAt = now;
+    }
+
+    /** Called on every successful login - a real password clears the slate. */
+    public void unlock(Instant now) {
+        if (this.lockedUntil != null) {
+            this.lockedUntil = null;
+            this.updatedAt = now;
+        }
     }
 }

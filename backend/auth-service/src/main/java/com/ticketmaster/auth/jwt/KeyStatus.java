@@ -9,8 +9,12 @@ package com.ticketmaster.auth.jwt;
  * key BEFORE the first token signed by it exists. Without a distinct state,
  * "publish then cut over" collapses into "cut over", and every warm-cached
  * gateway rejects every token for up to one cache TTL.
+ *
+ * Public so {@code jwt.rotation} can write these status strings into the
+ * Vault entries it creates/mutates, using the exact same vocabulary
+ * {@link VaultSigningKeyProvider} reads.
  */
-enum KeyStatus {
+public enum KeyStatus {
 
     /** In JWKS, not signing. Phase 1, and phase 3 for the outgoing key. */
     PUBLISHED,

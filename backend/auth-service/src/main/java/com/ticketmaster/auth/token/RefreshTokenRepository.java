@@ -44,4 +44,30 @@ interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID> {
     @Query("UPDATE RefreshToken t SET t.revokedAt = :now "
             + "WHERE t.familyId = :familyId AND t.revokedAt IS NULL")
     int revokeFamily(@Param("familyId") UUID familyId, @Param("now") Instant now);
+
+    /**
+     * ADR-012 self-service logout: revokes exactly the one device's active
+     * token(s), keyed by `sid` rather than `familyId` - the two happen to
+     * coincide today (one login = one family = one session, unchanged by
+     * rotation), but the revocation endpoint's contract is "log out this
+     * session," so it is expressed in those terms rather than borrowing
+     * the family concept it is not actually about.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE RefreshToken t SET t.revokedAt = :now "
+            + "WHERE t.sessionId = :sessionId AND t.revokedAt IS NULL")
+    int revokeBySessionId(@Param("sessionId") UUID sessionId, @Param("now") Instant now);
+
+    /**
+     * ADR-012 "log out everywhere" / admin ban: every one of a user's
+     * active refresh tokens across every family, in one statement. A bulk
+     * update rather than looping {@link #revokeFamily} per family - the
+     * end state (every active row for this user is revoked) is identical,
+     * and this is the minimal addition the task asked for rather than a
+     * new family-enumeration query this repository does not otherwise need.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE RefreshToken t SET t.revokedAt = :now "
+            + "WHERE t.userId = :userId AND t.revokedAt IS NULL")
+    int revokeAllByUserId(@Param("userId") UUID userId, @Param("now") Instant now);
 }

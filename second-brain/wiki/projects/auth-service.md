@@ -2,9 +2,9 @@
 title: auth-service
 type: project
 sources: []
-related: [[system-overview]], [[user-service]], [[api-gateway]], [[ADR-012-jwt-lifecycle]], [[ADR-036-build-order-and-phasing]]
+related: [[system-overview]], [[user-service]], [[api-gateway]], [[ADR-012-jwt-lifecycle]], [[ADR-036-build-order-and-phasing]], [[ADR-039-dual-tier-login-rate-limiting]], [[ADR-040-login-attempt-decay]]
 created: 2026-08-05
-last-updated: 2026-08-14
+last-updated: 2026-08-19
 ---
 
 ## Purpose
@@ -62,13 +62,78 @@ ADR-036 Phase 1). Verified against `backend/auth-service/src/`:
   `AccessTokenIssuer` knows nothing about credentials — it turns an
   already-established identity into a token, keeping the one class holding a
   private key free of authentication branches.
-- **Signing keys are ephemeral and in-memory today.** ADR-010 requires Vault
-  KV v2 (loaded at startup, never on disk, deliberately not Vault Transit
-  since signing happens on every login). The provider interface is the seam
-  for that; the current implementation generates one RSA-2048 pair per
-  process, which is correct at ONE instance and wrong at two — each replica
-  would publish only its own key and reject the other's tokens. Gated behind
-  `auth.jwt.key-source=ephemeral`, WARNs at startup.
+- `login/` — `LoginController` (`POST /api/v1/auth/login`), `LoginService`
+  (credential verification: dummy-hash BCrypt burn on unknown email,
+  identical `InvalidCredentialsException` for unknown-email/wrong-password/
+  locked-account so none is distinguishable from another by response or
+  timing). `LoginAttemptLimiter` implements the account-abuse layer of
+  [[ADR-039-dual-tier-login-rate-limiting]] with [[ADR-040-login-attempt-decay]]'s
+  two-window Redis design (`login_attempt_windows.lua`, one atomic script):
+  5 failed attempts/min per email trips a 429
+  (`TooManyLoginAttemptsException`), 15 failures/24h (self-decaying, not
+  the old DB counter that never did) locks the account 15 minutes via
+  `User.lockedUntil` alone — `User.failedLoginAttempts` and its V2 column
+  are gone (`V5__drop_failed_login_counter.sql`). Both windows fail open
+  on a Redis outage. This closes what was, until 2026-08-19, this page's
+  own stale "login itself... credential verification does not [exist]"
+  Gap entry below.
+- **Signing keys: both providers exist, ephemeral is just the default.**
+  This page previously said Vault-backed keys were unimplemented — wrong,
+  corrected 2026-08-19 after actually reading the code rather than trusting
+  this page (the exact mistake CLAUDE.md's source-authority order warns
+  about). `EphemeralSigningKeyProvider` generates one RSA-2048 pair in
+  memory per process — correct at one instance, wrong at two, since each
+  replica would publish only its own key and reject the other's tokens;
+  gated behind `auth.jwt.key-source=ephemeral` (the config default) and
+  WARNs at startup. `VaultSigningKeyProvider` (ADR-010, `key-source=vault`)
+  is fully implemented and tested against a real Vault via Testcontainers
+  (`VaultSigningKeyProviderTest`): reads the key set from Vault KV v2
+  (never Transit — signing happens on every login/refresh, a network round
+  trip per signature is the wrong trade), caches with a refresh interval,
+  fails open on a transient Vault outage by serving the cached set, and
+  handles the multi-replica bootstrap race with a CAS-guarded first write
+  so only one replica's generated key wins.
+  **What's still actually missing**: nothing calls Vault by default in any
+  environment (`key-source` defaults to `ephemeral` everywhere including
+  presumably production config, which is itself worth double-checking
+  before a real deploy). The rotation state machine itself — **update,
+  later the same day (2026-08-19): built.** See the Rotation & revocation
+  bullet below.
+
+- **Rotation & revocation (ADR-012), built 2026-08-19.** `jwt/rotation/`:
+  `RotationState`/`RotationStateRepository` (Postgres-persisted phase +
+  timestamps, survives restarts), `RotationOrchestrator` (drives Vault
+  key status through PUBLISHED -> SIGNING -> RETIRED),
+  `RotationScheduler` (advances a phase once its configured minimum
+  duration elapses), `RotationAdminController` (ADMIN-only
+  start/compromise-skip-to-RETIRE). `shared/outbox/`:
+  `OutboxEvent`/`OutboxEventRepository` (ADR-007's schema),
+  `RevocationPublisher` (`Propagation.MANDATORY` — deliberately refuses
+  to open its own transaction, since that would defeat the outbox
+  pattern's entire guarantee). `revocation/`: `LogoutController`
+  (`/logout` session-scoped, `/logout-everywhere` user-scoped, both
+  self-service), `AdminUserController` (`/admin/users/{id}/ban`,
+  ADMIN-only, audited via `shared/AdminActionAuditLogger`). All four
+  endpoints authenticate via the new `jwt/TokenVerifier` — real signature
+  verification against this service's own keys, not the
+  unverified-decode shortcut a downstream consumer like user-service
+  uses, since auth-service actually holds the key material and has no
+  excuse not to check it properly. The Kafka Connect/Debezium connector
+  that bridges the `outbox` table to `auth.revocation` is now specified
+  at `infra/kafka-connect/auth-outbox-connector.json` (Debezium
+  `EventRouter` SMT, `route.by.field=event_type` — since `event_type`'s
+  value is already the literal topic name, `${routedByValue}` needs no
+  rewrite; `table.field.event.key=aggregate_id` so the Kafka record key
+  is the revocation scope `RevocationConsumer` expects) plus
+  `infra/kafka-connect/register-auth-outbox-connector.sh` to POST it to
+  Connect's REST API — Connect has no "load at boot" mechanism, so this
+  is a deliberate manual/CI step, not automatic on `docker compose up`.
+  Registering it (and the `wal_level=logical` change on
+  `postgres-coordinator` it depends on, both landed 2026-08-19) still
+  requires actually running the stack, which has not been done in this
+  session — see [[api-gateway]]'s consumer side, built and tested but
+  with nothing flowing to it until someone runs that script against a
+  live compose stack.
 - `AuthApplicationTest` — Testcontainers Postgres, ADR-008's integration
   tier. Asserts the schema Flyway produced and that CITEXT really makes
   email comparison case-insensitive.
@@ -110,6 +175,13 @@ Docker environment". The pin is in `subprojects` because every
 Testcontainers-backed test in every module will hit it, not just this
 service.
 
+**Containerized**: runs via `docker compose --profile backend up` (see
+`backend/Dockerfile`, `infra/docker-compose.yml`), host port 8081.
+Verified live 2026-08-19: container reports healthy,
+`GET /actuator/health` 200, and a live `POST /api/v1/auth/register`
+routed through api-gateway's container reached this container over the
+compose network.
+
 ## Target Design
 
 - Spring Boot, Spring Security, JWT (access + refresh token pair).
@@ -127,13 +199,66 @@ service.
 
 ## Gap
 
-Everything except the above. Not implemented: login itself (token minting
-exists, credential verification does not), ADR-010's Vault-backed key
-source, ADR-012's four-phase key rotation, the
-`/refresh` endpoint with reuse detection, the `auth.revocation` producer,
-and Citus distribution by `user_id` (ADR-018 — deferred to a later
-migration since a single-node dev Postgres has nothing to distribute
-across).
+Everything except the above. Login itself is now implemented (see
+`login/` above) — this entry was stale from 2026-08-14 until 2026-08-19.
+ADR-010's Vault-backed key source is also implemented (see the corrected
+Signing keys bullet above) — this Gap list previously said otherwise,
+also wrong, also corrected 2026-08-19.
+
+**Also now implemented, 2026-08-19**: ADR-012's four-phase key rotation
+orchestrator (`jwt/rotation/` — `RotationOrchestrator`,
+`RotationScheduler`, admin-triggered start/compromise endpoints) and the
+`auth.revocation` producer (`shared/outbox/RevocationPublisher`, ADR-007's
+transactional-outbox pattern; `revocation/` package's `/logout`,
+`/logout-everywhere`, `/admin/users/{id}/ban`). Both verify bearer tokens
+via the new `jwt/TokenVerifier` — real signature checking against this
+service's own `SigningKeyProvider`, not an unverified decode, since this
+service (unlike a downstream consumer) actually holds the key material.
+**Verified working end-to-end, 2026-08-19**: the Kafka Connect/Debezium
+connector bridging the `outbox` table to `auth.revocation`
+(`infra/kafka-connect/auth-outbox-connector.json` +
+`register-auth-outbox-connector.sh`) was registered against a live
+compose stack and proven with a real request: `POST
+/api/v1/auth/logout-everywhere` → outbox row → Debezium → the topic →
+[[api-gateway]]'s `RevocationConsumer` → a previously-issued access token
+for that user rejected with 401 through the gateway, while a token
+issued *after* the revocation still worked. Three real bugs surfaced and
+were fixed in the process, none of them application code:
+
+- `docker-compose.yml`'s Kafka Connect worker pointed
+  `KEY_CONVERTER`/`VALUE_CONVERTER` at
+  `io.confluent.connect.avro.AvroConverter` — a class the plain
+  `debezium/connect` image (as opposed to Confluent's own
+  `cp-kafka-connect`) does not bundle. The worker crash-looped on
+  startup before any connector could ever register. Switched the
+  worker default to `JsonConverter`.
+- The connector's `table.field.event.timestamp: created_at` mapping
+  assumed an INT64 column; `created_at` is `TIMESTAMPTZ`, which Debezium
+  represents as a string, not INT64 — the task died parsing the very
+  first row. Removed the mapping; the outbox event-router SMT falls
+  back to Debezium's own CDC envelope timestamp when this is unset,
+  which is all this feature ever needed.
+- The connector's `value.converter: JsonConverter` double-encoded a
+  payload that arrives from Debezium already as a JSON string (JSONB
+  columns are represented as plain text) — the topic held an
+  escaped, quoted string instead of raw JSON, which
+  `RevocationConsumer`'s Jackson parser correctly rejected. Switched to
+  `StringConverter` for both key and value, matching what a raw
+  `KafkaConsumer<String,String>` actually expects on the wire.
+
+Still genuinely not implemented: cross-region rotation/revocation
+concerns (single-region only), and Citus distribution by `user_id`
+(ADR-018 — deferred to a later migration since a single-node dev
+Postgres has nothing to distribute across).
+
+**Note for future sessions**: the `/refresh` endpoint and the JWT gateway
+edge routing mentioned in this repo's recent git history
+(`ef58375 feat: refresh endpoint with reuse detection`,
+`1d2241f feat(gateway): route and validate JWTs at the edge`) are not yet
+reflected in this page's Current Implementation section above — verify
+against `backend/auth-service/src/main/java/.../refresh/` and
+`backend/api-gateway/src/main/java/.../jwt/` before relying on this page
+for their status.
 
 ## Open Questions
 

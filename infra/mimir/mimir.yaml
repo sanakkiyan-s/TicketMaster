@@ -1,0 +1,50 @@
+# Filesystem backend, single process (-target=all, Mimir's default) -
+# Mimir's own documented simplest local deployment mode. See
+# infra/tempo/tempo.yaml's header for why this skips MinIO/S3 at current
+# scale; same reasoning applies here.
+
+multitenancy_enabled: false
+
+server:
+  http_listen_port: 8080
+  grpc_listen_port: 9095
+  log_level: warn
+
+blocks_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/blocks
+  bucket_store:
+    sync_dir: /data/tsdb-sync
+
+compactor:
+  data_dir: /data/compactor
+
+ruler_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/ruler
+
+alertmanager_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/alertmanager
+
+# Single instance, no real gossip ring needed.
+memberlist:
+  join_members: []
+
+# Mimir's ring-based components default to replication_factor: 3 (built
+# for a multi-ingester cluster) - with exactly one process, that made the
+# distributor refuse every remote_write ("at least 2 live replicas
+# required, could only find 1") and the querier refuse every read
+# ("too many unhealthy instances in the ring"), reproduced live
+# 2026-08-20 querying Mimir right after the stack came up clean. Both
+# rings need to agree there is only ever 1 replica at this scale.
+ingester:
+  ring:
+    replication_factor: 1
+
+store_gateway:
+  sharding_ring:
+    replication_factor: 1

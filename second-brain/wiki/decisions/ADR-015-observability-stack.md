@@ -4,10 +4,93 @@ type: decision
 sources: []
 related: [[ADR-002-seat-locking-strategy]], [[ADR-004-redis-cluster-sharding]], [[ADR-006-saga-booking-orchestration]], [[ADR-007-kafka-event-schema]], [[cross-cutting-concerns]], [[flows/seat-availability-live-updates]]
 created: 2026-08-06
-last-updated: 2026-08-06
+last-updated: 2026-08-20
 ---
 
 Status: Accepted
+
+## Verification Status (2026-08-20)
+
+Built and verified live against the 3 services that actually exist
+(auth-service, api-gateway, user-service) — see
+[[infra]] for the infra-side writeup.
+
+**Live and confirmed with a real request** (register + login through the
+gateway):
+- OTel Java agent instrumentation on all 3 services (traces, metrics,
+  logs, one `-javaagent` flag in `backend/Dockerfile`, no per-service
+  code).
+- Single-Collector topology (not the two-tier agent/gateway split this
+  ADR's literal text describes) — deliberate simplification at
+  3-service/single-host scale; every service points at "the collector"
+  via one env var, so upgrading to two-tier later is a topology change,
+  not an app change. Revisit per this ADR's own "Revisit When" framing
+  once horizontal scaling makes tail-sampling-at-scale relevant.
+- Tempo: full cross-service trace (api-gateway → auth-service, 16 spans,
+  real JDBC/Redis/Hibernate detail) confirmed for a real login request.
+- Loki: `trace_id` structured-metadata correlation confirmed — same
+  trace ID present on both the Tempo trace and the matching auth-service
+  log line.
+- Mimir: real per-route/per-service request-count series confirmed
+  (`http_server_request_duration_seconds_count`) for the exact
+  register/login calls made during verification.
+- Debezium/JMX exporter on kafka-connect: real metric names confirmed
+  (`debezium_postgres_connector_metrics_millisecondsbehindsource`,
+  `_snapshotdurationinseconds`), flowing through Prometheus (agent mode)
+  → Mimir.
+- Outbox tracing (`traceparent`/`tracestate` on outbox rows →
+  `RevocationPublisher.java` → Debezium EventRouter SMT → Kafka headers)
+  is live now that the agent generates real W3C traceparent headers — no
+  code change was needed, that path already did the right thing (see
+  that file's own comment, written before this ADR was implemented).
+- Grafana dashboard (`TicketMaster - Service Overview`: request
+  rate/p95 latency/error rate per service, JVM heap/GC, Debezium lag)
+  and one alert rule (`OutboxStalled`, >30s lag for 5m) provisioned and
+  loaded by Grafana with no errors, and **live-fire tested end to end**
+  on 2026-08-20 — genuinely confirmed, not just config-checked. Two real
+  findings from that test:
+  - The originally-planned test method (pause the connector, generate an
+    outbox event, wait) doesn't exercise the alert at all: Debezium's
+    `MilliSecondsBehindSource` only recalculates when it processes a new
+    event, so it *freezes* at its last value while the connector is
+    paused rather than climbing — a paused connector produces no lag
+    signal, not a growing one. Verified via the raw JMX exporter output
+    before and after a pause+event+wait cycle: value never moved.
+  - The real test method (temporarily lower the threshold below the
+    current real value, confirm Alerting, restore) uncovered a genuine
+    bug: Grafana's threshold expression node needs a top-level
+    `expression: A` field naming which query to operate on —
+    `conditions[].query.params` alone isn't enough. Without it the rule
+    provisions with **no error** but fails at evaluation time
+    (`"failed to parse expression 'C': no variable specified to
+    reference for refId C"`), and Grafana's default
+    `execErrState: Alerting` makes a broken rule look like it fired. Now
+    fixed in `infra/grafana/provisioning/alerting/rules.yml`. After the
+    fix, the alert was confirmed to transition to a genuine `Alerting`
+    state with a real evaluated value (not an error) and reverted
+    cleanly to `inactive` once the threshold was restored to 30000.
+
+**Explicitly deferred, not silently dropped** — this ADR designs against
+domain concepts (bookings, sagas, payments, holds) that don't exist yet:
+- The other 4 P1 alerts (`PaidUserUnresolved`, `DoubleSellDetected`,
+  `PaymentWebhooksSilent`, `OnSaleCriticalPathDown`) — nothing exists yet
+  for them to alert on.
+- All domain-specific SLIs below (saga latency, three-way hold outcome,
+  payment webhook deadman, SSE lag) — same reason.
+- MinIO/S3 object storage for Tempo/Loki/Mimir — filesystem storage used
+  instead at current scale (each tool's own documented simplest
+  local/single-binary mode); revisit if retention or multi-instance
+  needs force it.
+
+**One real bug found and fixed during verification, worth knowing about**:
+Mimir's ingester/store-gateway rings default to `replication_factor: 3`
+(built for a multi-ingester cluster) — with exactly one Mimir process,
+every write and every query failed outright until
+`infra/mimir/mimir.yaml` explicitly set `replication_factor: 1` on both
+rings. Anyone standing this up fresh should not be surprised by "at
+least 2 live replicas required" / "too many unhealthy instances in the
+ring" — it's already fixed, just noted here for anyone who forks the
+config elsewhere.
 
 # Context
 

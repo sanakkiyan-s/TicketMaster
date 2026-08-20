@@ -13,13 +13,16 @@ import java.security.interfaces.RSAPublicKey;
  * derived kids differently, a key seeded by one and read by the other would
  * change identity, and every already-issued token naming the old kid would
  * fail verification against a key set that still contains the same key.
+ *
+ * Public so {@code jwt.rotation} can derive the same kid for a freshly
+ * generated key, rather than inventing a second thumbprint algorithm.
  */
-final class Thumbprint {
+public final class Thumbprint {
 
     private Thumbprint() {
     }
 
-    static String of(RSAPublicKey publicKey) {
+    public static String of(RSAPublicKey publicKey) {
         String canonical = "{\"e\":\"" + Base64Url.of(publicKey.getPublicExponent())
                 + "\",\"kty\":\"RSA\",\"n\":\"" + Base64Url.of(publicKey.getModulus()) + "\"}";
         try {

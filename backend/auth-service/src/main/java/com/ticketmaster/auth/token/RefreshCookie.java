@@ -42,4 +42,20 @@ public class RefreshCookie {
                 .maxAge(lifetime)
                 .build();
     }
+
+    /**
+     * An already-expired Set-Cookie, for logout. Same attributes as {@link
+     * #build}, with an empty value and {@code maxAge(0)}, which is what
+     * tells the browser to delete the cookie immediately rather than merely
+     * not renew it.
+     */
+    public ResponseCookie expire() {
+        return ResponseCookie.from(NAME, "")
+                .httpOnly(true)
+                .secure(secure)
+                .sameSite("Strict")
+                .path("/api/v1/auth")
+                .maxAge(Duration.ZERO)
+                .build();
+    }
 }

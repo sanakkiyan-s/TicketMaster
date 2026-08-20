@@ -2,9 +2,9 @@
 title: Cross-Cutting Concerns
 type: concept
 sources: []
-related: [[ADR-003-gap-list-triage]], [[system-overview]]
+related: [[ADR-003-gap-list-triage]], [[system-overview]], [[ADR-015-observability-stack]]
 created: 2026-08-05
-last-updated: 2026-08-05
+last-updated: 2026-08-20
 ---
 
 Patterns applied consistently across most/all services rather than owned
@@ -23,11 +23,19 @@ implemented anywhere — policy decided, required before
 
 ## Distributed tracing / observability
 
-Correlation ID generated at `api-gateway`, propagated through every
-downstream call (HTTP header + Kafka message header) so a single booking
-attempt can be traced across services. Structured logging (JSON) with the
-correlation ID on every log line. Specific tooling (e.g. OpenTelemetry +
-Jaeger/Zipkin) not yet decided.
+Resolved — see [[ADR-015-observability-stack]]: OpenTelemetry Java agent
+(not Jaeger/Zipkin), Tempo for trace storage, Loki for logs, Mimir for
+metrics. Built and verified live 2026-08-20 against the 3 services that
+exist. The original plan described a custom correlation-ID header
+generated at `api-gateway` and propagated manually — that was never
+implemented (`backend/api-gateway/src` has no correlation-ID code) and is
+superseded by this decision: the OTel agent generates a real W3C
+`traceparent` automatically on every request and propagates it through
+HTTP headers and Kafka message headers (via Debezium's EventRouter SMT
+for the outbox boundary specifically), doing the same job without
+hand-rolled code. Every log line gets `trace_id`/`span_id` attached
+automatically by the agent's Logback instrumentation — no
+`logging.structured.format` change was needed.
 
 ## Feature flags
 
@@ -60,6 +68,5 @@ Not yet configured.
 
 ## Open Questions
 
-- Tracing tool choice — not decided.
 - Feature flag tooling — not decided.
 - Per-entity GDPR deletion/anonymization rules — not decided.

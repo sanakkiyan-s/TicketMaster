@@ -1,0 +1,37 @@
+# Filesystem backend, not MinIO/S3 - Tempo's own documented "local /
+# single binary" mode. Object storage's value (durability, multi-instance
+# sharing) doesn't apply at single-host Compose scale; the S3 path-style/
+# bucket-policy surface is exactly the kind of thing that burned real time
+# on the Kafka Connect connector config earlier this session, for no
+# benefit at this scale. Same simplification spirit as the single-
+# collector choice - swap to MinIO if this ever needs to survive a
+# container being recreated independent of its volume, or be queried by
+# more than one Tempo instance.
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  trace_idle_period: 10s
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 336h
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal

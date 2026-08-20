@@ -49,3 +49,28 @@ export function useRegister(onSuccess: () => void) {
     retry: false,
   })
 }
+
+/**
+ * /api/v1/auth/logout is a self-service endpoint being built alongside this
+ * (revokes the current session, clears the refresh cookie server-side,
+ * returns 204). It may not exist yet, or the request may simply fail on a
+ * flaky network — either way the local session still has to go. A user must
+ * never be stuck looking "logged in" client-side just because the server
+ * call didn't succeed, so `clearSession` runs in `onSettled`, not `onSuccess`,
+ * and a failed call is logged rather than surfaced as a blocking error.
+ */
+export function useLogout(onSettled: () => void) {
+  const clearSession = useAuthStore((state) => state.clearSession)
+
+  return useMutation<void, ApiError, void>({
+    mutationFn: () => apiPost<void>("/api/v1/auth/logout", undefined),
+    onError: (error) => {
+      console.error("Logout request failed; clearing local session anyway.", error)
+    },
+    onSettled: () => {
+      clearSession()
+      onSettled()
+    },
+    retry: false,
+  })
+}

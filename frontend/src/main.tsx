@@ -6,7 +6,9 @@ import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 
 import { LoginPage } from "@/features/auth/LoginPage";
 import { RegisterPage } from "@/features/auth/RegisterPage";
-import { ProtectedRoute } from "@/features/auth/ProtectedRoute";
+import { useSilentRefresh } from "@/features/auth/useSilentRefresh";
+import { HomePage } from "@/features/home/HomePage";
+import { useAuthStore } from "@/stores/auth";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,7 +23,17 @@ const queryClient = new QueryClient({
   },
 });
 
-function Placeholder() {
+/**
+ * "/" is one route with two faces: HomePage once signed in, a plain landing
+ * otherwise. No ProtectedRoute redirect dance needed for the root — signing
+ * out just swaps which face renders, in place.
+ */
+function Root() {
+  const accessToken = useAuthStore((state) => state.accessToken);
+  return accessToken ? <HomePage /> : <Landing />;
+}
+
+function Landing() {
   return (
     <main className="auth-backdrop mx-auto flex min-h-dvh max-w-2xl flex-col items-start justify-center gap-4 px-6">
       <h1 className="text-3xl font-semibold tracking-tight">TicketMaster</h1>
@@ -41,32 +53,37 @@ function Placeholder() {
   );
 }
 
-/** Placeholder for the first authenticated surface. */
-function Account() {
-  return (
-    <main className="auth-backdrop mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-4 px-6">
-      <h1 className="text-3xl font-semibold tracking-tight">Your account</h1>
-      <p className="text-muted-foreground">
-        Signed in. Tickets and transfers arrive with ticket-service.
-      </p>
-    </main>
-  );
+/**
+ * Gate for the whole app, not just protected routes.
+ *
+ * Runs silent refresh once before anything renders past this point, so
+ * ProtectedRoute's redirect check sees a recovered session (if any) instead
+ * of the momentarily-empty store every reload starts with. The loading
+ * state is brief — one network round trip — and intentionally has no
+ * branding beyond staying blank, since a reload should feel instant rather
+ * than flashing a login page and then swapping to authenticated content.
+ */
+function SessionGate({ children }: { children: React.ReactNode }) {
+  const { isLoading } = useSilentRefresh();
+
+  if (isLoading) {
+    return <div className="auth-backdrop min-h-dvh" aria-busy="true" />;
+  }
+
+  return <>{children}</>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Placeholder />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-
-          {/* Everything nested here requires a session. */}
-          <Route element={<ProtectedRoute />}>
-            <Route path="/account" element={<Account />} />
-          </Route>
-        </Routes>
+        <SessionGate>
+          <Routes>
+            <Route path="/" element={<Root />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+          </Routes>
+        </SessionGate>
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>,
