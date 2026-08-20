@@ -8,13 +8,14 @@
 #              Kafka + Schema Registry + Connect, Vault, MinIO.
 #   backend/   auth-service (host :8180, container :8081 - 8081/8083 were
 #              already taken by other local processes), api-gateway
-#              (:8080), user-service (host :8090, container :8082) - the
-#              only three modules with real sources so far
-#              (ADR-036 Phase 1). Built and run as containers via the
-#              same docker-compose.yml, gated behind the "backend"
-#              profile so plain infra startup never pays their build
-#              time. The other 12 backend/* directories hold build
-#              files only - nothing to run.
+#              (:8080), user-service (host :8090, container :8082),
+#              event-service (:8084), venue-service (:8085),
+#              search-service (:8086, Elasticsearch-backed) - Phase 1
+#              (ADR-036) plus the full Phase 2 catalog batch. Built and
+#              run as containers via the same docker-compose.yml, gated
+#              behind the "backend" profile so plain infra startup never
+#              pays their build time. The other 9 backend/* directories
+#              hold build files only - nothing to run.
 #   observability/ OTel Collector, Tempo, Loki, Mimir, Prometheus (agent
 #              mode), redis-exporter, Grafana (:3000) - ADR-015. Gated
 #              behind the "observability" profile, same reasoning as
@@ -50,7 +51,7 @@ HEALTHCHECKED=(postgres-coordinator postgres-worker-1 redis minio)
 # Backend containers declare their own healthcheck (Dockerfile installs
 # curl for exactly this) - same wait_for_health mechanism as infra,
 # different list, since these only run under the "backend" profile.
-BACKEND_HEALTHCHECKED=(auth-service api-gateway user-service)
+BACKEND_HEALTHCHECKED=(auth-service api-gateway user-service event-service venue-service search-service)
 
 # None of the observability images declare a container healthcheck
 # (Tempo/Loki/Mimir/Grafana's base images don't reliably ship curl or
@@ -227,6 +228,9 @@ print_backend_endpoints() {
     api-gateway     http://localhost:8080
     auth-service    http://localhost:8180   (container's own port is 8081 - host 8081 was already taken by an unrelated local project, and 8083 by kafka-connect's own REST port)
     user-service    http://localhost:8090   (container's own port is 8082 - 8082 is schema-registry's host mapping)
+    event-service   http://localhost:8084
+    venue-service   http://localhost:8085
+    search-service  http://localhost:8086   (public, no JWT required - the read-only browse API)
 
 EOF
 }

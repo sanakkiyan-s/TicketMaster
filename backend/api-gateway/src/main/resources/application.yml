@@ -98,6 +98,26 @@ spring:
           # a valid access token first (not in gateway.jwt.public-paths, see
           # below), so there is no unauthenticated brute-force surface to
           # shield.
+        - id: event-service
+          uri: ${EVENT_SERVICE_URI:http://localhost:8084}
+          predicates:
+            # Covers EventController/SessionController/ArtistController -
+            # all three live under /api/v1/organizer/** (events, nested
+            # sessions, artists). Same no-rate-limiter reasoning as
+            # user-service: every route requires a valid access token
+            # first, ADR-030's ownership check happens in-service.
+            - Path=/api/v1/organizer/events/**,/api/v1/organizer/artists/**
+        - id: venue-service
+          uri: ${VENUE_SERVICE_URI:http://localhost:8085}
+          predicates:
+            # VenueController/SectionController/SeatController all live
+            # under /api/v1/organizer/venues/** - narrowed from event-
+            # service's route above (which used to be a bare
+            # /api/v1/organizer/** catch-all) so the two services don't
+            # collide on the same prefix; routes are matched in list
+            # order, first match wins, so this more specific one must
+            # come immediately after event-service's.
+            - Path=/api/v1/organizer/venues/**
 
       httpclient:
         connect-timeout: 2000

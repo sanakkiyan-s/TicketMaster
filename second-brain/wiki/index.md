@@ -30,8 +30,11 @@ ruleset this vault operates under.
 
 # Projects
 
-One page per repo. All currently **not started** — pages document target
-design only, will be rewritten from actual code once implementation begins.
+One page per repo. Most still **not started** — pages document target
+design only until implementation begins. [[event-service]] is the
+exception verified so far: in progress as of 2026-08-20 (organizer CRUD
+built, no public read endpoint, no gateway route yet) — its page has been
+rewritten from actual code, not just target design.
 
 - [[api-gateway]] (`wiki/projects/api-gateway.md`)
 - [[auth-service]] (`wiki/projects/auth-service.md`)
@@ -193,6 +196,20 @@ into standalone flow pages.
   matters, not every failed attempt. `locked_until` stays the sole
   DB-persisted state. Single-phase column drop, not ADR-027's full
   expand/contract, per that ADR's own pre-launch relaxation clause.
+- [[ADR-041-iac-tooling]] — closes half the Deployment provisioning gap:
+  Terraform provisions VPC/EKS/node-groups/IRSA only, remote state in S3 +
+  DynamoDB lock table, one root module per environment. AWS itself was
+  already fixed by ADR-019; this is tooling on top of that, not a new
+  cloud decision. CDK/Pulumi/raw CloudFormation/ClickOps considered and
+  rejected — ClickOps specifically for the same drift/lost-state risk
+  `infra.md` already hit once.
+- [[ADR-042-manifest-delivery]] — closes the other half: ArgoCD,
+  pull-based GitOps, App-of-Apps over the staging/prod Kustomize overlays,
+  auto-sync + self-heal. CI (ADR-038) never gets cluster-write access —
+  it stops at build/test/push-image plus a scoped overlay image-tag bump.
+  Flux considered and rejected mainly on ArgoCD's UI being real portfolio
+  value; kubectl-from-CI rejected for the same credential-blast-radius and
+  drift reasons ADR-041 already used against ClickOps.
 - [[ADR-036-build-order-and-phasing]] — closes the vault's oldest open
   question. Six dependency-ordered phases (bootstrap → identity/edge →
   catalog → transaction core → support consumers → secondary features →
@@ -406,15 +423,18 @@ live list. Summary:
   constrains a backend guarantee, which is this vault's ADR bar.
 - ~~fraud-service fail-open vs fail-closed~~ — resolved: fail-open,
   logged, see [[fraud-service]].
-- **Deployment provisioning gap** — opened 2026-08-14. Twelve wiki pages
-  assume Kubernetes (ADR-032's replicas/HPA/probes, ADR-033's ConfigMaps,
-  ADR-009's NetworkPolicy, ADR-010's Vault AppRole, ADR-008's `kubectl
-  rollout undo`), but nothing states how a cluster gets created (IaC
-  tooling — Terraform et al.) or how manifests reach it (ArgoCD / Flux /
-  kubectl-from-CI / Helm). Only `infra/docker-compose.yml` exists today.
-  Deliberately deferred to Phase 5/6 rather than decided early — see
-  [[implementation-roadmap]]'s Open Decisions for the full note and the
-  risk if it is never closed.
+- ~~Deployment provisioning gap~~ — opened 2026-08-14, resolved
+  2026-08-20. Twelve wiki pages assume Kubernetes (ADR-032's
+  replicas/HPA/probes, ADR-033's ConfigMaps, ADR-009's NetworkPolicy,
+  ADR-010's Vault AppRole, ADR-008's `kubectl rollout undo`). Both halves
+  now decided: cluster provisioning — [[ADR-041-iac-tooling]] (Terraform,
+  EKS) — and manifest delivery — [[ADR-042-manifest-delivery]] (ArgoCD,
+  pull-based GitOps). Nothing has been *applied* yet — only
+  `infra/docker-compose.yml` runs today; this closes the design gap, not
+  the implementation gap. See [[implementation-roadmap]]'s Open Decisions.
+- ~~IaC tooling~~ — resolved 2026-08-20, see [[ADR-041-iac-tooling]].
+- ~~k8s manifest delivery~~ — resolved 2026-08-20, see
+  [[ADR-042-manifest-delivery]].
 - Dynamic/surge pricing — deferred, see [[ADR-003-gap-list-triage]].
 - ~~Hold TTL base duration~~ — resolved: 5 min flat, see
   [[ADR-002-seat-locking-strategy]].

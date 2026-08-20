@@ -25,14 +25,16 @@ existed and grown since. What's actually running today (all via
   `pgbouncer`, `redis`, `kafka`, `kafka-connect` (Debezium, with a JMX
   Prometheus exporter javaagent baked into its own image —
   `infra/jmx-exporter/`), `schema-registry`, `vault` (dev mode), `minio`.
-- **`backend` profile**: `auth-service`, `api-gateway`, `user-service` —
-  the 3 services that exist. Each service's OTel Java agent + resource
-  attributes are wired here (`OTEL_SERVICE_NAME` etc.), not in the
-  services' own `application.yml`. auth-service's host port is `8180`,
-  not the in-network `8081` — `8081`/`8083` were both already taken by
-  unrelated local projects, discovered live 2026-08-20; container-internal
-  port and every in-network reference (`AUTH_SERVICE_URI`,
-  `JWKS_URI`) are unaffected.
+- **`backend` profile**: `auth-service`, `api-gateway`, `user-service`,
+  `event-service` — the 4 services that exist. Each service's OTel Java
+  agent + resource attributes are wired here (`OTEL_SERVICE_NAME` etc.),
+  not in the services' own `application.yml`. auth-service's host port is
+  `8180`, not the in-network `8081` — `8081`/`8083` were both already
+  taken by unrelated local projects, discovered live 2026-08-20;
+  container-internal port and every in-network reference
+  (`AUTH_SERVICE_URI`, `JWKS_URI`) are unaffected. event-service is
+  `8084` on both host and container (no collision, so no remap needed) —
+  see [[event-service]] for what's built there.
 - **`observability` profile** ([[ADR-015-observability-stack]], built and
   verified live 2026-08-20): `otel-collector`, `tempo`, `loki`, `mimir`,
   `prometheus` (agent mode, `remote_write`s to Mimir), `redis-exporter`,

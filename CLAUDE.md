@@ -45,7 +45,7 @@ concretely why — cite the ADR you'd supersede.
 | `backend/api-gateway` | Edge routing, auth token validation, rate limiting | in progress — see [[api-gateway]] |
 | `backend/auth-service` | Identity, JWT issuance/refresh, roles | in progress — see [[auth-service]] |
 | `backend/user-service` | User profile, payment methods on file, preferences | in progress — see [[user-service]] |
-| `backend/event-service` | Events, sessions/shows, artist/performer data | not started |
+| `backend/event-service` | Events, sessions/shows, artist/performer data | in progress (organizer CRUD built, no public read endpoint, no gateway route yet) — see [[event-service]] |
 | `backend/venue-service` | Venues, seating layout/seat maps | not started |
 | `backend/search-service` | Denormalized search/discovery index (fed by event/venue events) | not started |
 | `backend/inventory-service` | Seat inventory state machine (AVAILABLE/HELD/PURCHASED) — concurrency core | not started |

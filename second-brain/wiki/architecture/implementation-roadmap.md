@@ -463,10 +463,18 @@ yet.
 
 - ~~CI runner/platform not named.~~ RESOLVED 2026-08-18 by
   [[ADR-038-ci-platform]]: GitHub Actions, two independent jobs.
-- IaC tooling not named (Terraform vs alternatives) — needed Phase 5/6.
-  Every k8s assumption in the vault currently has no provisioning story.
-- k8s manifest delivery not named (ArgoCD / Flux / kubectl-from-CI /
-  Helm) — needed Phase 5/6.
+- ~~IaC tooling not named.~~ RESOLVED 2026-08-20 by
+  [[ADR-041-iac-tooling]]: Terraform, modules split by concern, remote
+  state in S3 + DynamoDB lock table, one root module per environment
+  matching the staging/prod overlay split above. Provisions VPC/EKS/node
+  groups/IRSA only — application k8s objects stay the next decision's job.
+- ~~k8s manifest delivery not named.~~ RESOLVED 2026-08-20 by
+  [[ADR-042-manifest-delivery]]: ArgoCD, pull-based GitOps, App-of-Apps
+  over the staging/prod Kustomize overlays, auto-sync + self-heal. CI
+  (ADR-038) stops at build/test/push-image and an overlay image-tag bump —
+  never touches the cluster directly. Closes the Deployment provisioning
+  gap opened 2026-08-14 — both halves (cluster + manifests) now decided,
+  neither yet applied (Phase 5/6, [[ADR-036-build-order-and-phasing]]).
 - ~~Frontend CSS approach / component library~~ — resolved 2026-08-14:
   Tailwind CSS + shadcn/ui, see the frontend section above. (Build tool
   was never open — `frontend.md` specifies Vite; data layer resolved in
@@ -475,5 +483,33 @@ yet.
   per-service protobuf codegen (ADR-023) make incremental build and
   build-cache behaviour matter against ADR-008's <10min per-commit CI
   tier. Recorded here, not as an ADR: it constrains no runtime guarantee.
-- Seed/fixture data strategy not decided.
-- Staging environment shape not decided.
+- ~~Seed/fixture data strategy~~ — resolved 2026-08-20: seed via real
+  service HTTP APIs through api-gateway, not raw SQL. Raw inserts bypass
+  every service's transactional-outbox write path (ADR-007/ADR-031), so
+  downstream Kafka consumers (search-service index, notifications, etc.)
+  would silently never see seeded data — defeats the point of a
+  demo/dev environment and hides real integration bugs. Mechanics:
+  `infra/seed/` holds static JSON fixtures per service; `scripts/seed.sh`
+  posts them through api-gateway after `scripts/dev.sh` brings the
+  `backend` profile up; idempotent by skipping records that already
+  exist; full reset stays `docker compose down -v`, not the seed script's
+  job. Scope grows per service as each lands — today limited to
+  auth-service register calls. Not promoted to an ADR: dev tooling,
+  constrains no backend guarantee, same bar as the frontend-tooling notes
+  above.
+- ~~Staging environment shape~~ — resolved 2026-08-20: single-region,
+  single-replica scaled-down mirror of the production k8s topology, not a
+  second multi-region setup — ADR-016/018's multi-region design is
+  already flagged as ahead of this project's actual target load, and
+  proving multi-region failover is Phase 4 GATE work (T33/T34) tested
+  directly against prod-shaped infra, not staging's job. Same k8s
+  manifests as prod via a Kustomize overlay (`k8s/overlays/staging/` vs
+  `prod/`), never a hand-maintained parallel manifest set. 1 replica per
+  service (ADR-032's min-3 is a prod-only guarantee), 1 Citus coordinator
+  + 1 worker (ADR-005 sharding is a scale concern staging doesn't need to
+  prove), single-broker Kafka. Same ConfigMap/Vault AppRole pattern as
+  prod (ADR-033/ADR-010), separate namespace/environment scope only.
+  Seeded via `scripts/seed.sh` (previous decision), never hand-crafted
+  data. Target shape only — still blocked on IaC tooling (next item):
+  nothing provisions a k8s cluster yet, only `infra/docker-compose.yml`
+  exists (see this page's Deployment provisioning gap note).
