@@ -1,0 +1,73 @@
+package com.ticketmaster.venue.shared;
+
+import com.ticketmaster.venue.section.SectionNotFoundException;
+import com.ticketmaster.venue.venue.VenueNotFoundException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * One error shape for the whole service, as RFC 9457 ProblemDetail — see
+ * auth-service's shared/ApiExceptionHandler for the full rationale
+ * (ADR-037 rule 5, ADR-034 publishes this shape as the OpenAPI contract).
+ */
+@RestControllerAdvice
+public class ApiExceptionHandler {
+
+    /**
+     * 401, no detail beyond the status. Should be unreachable in
+     * production — see MissingOrInvalidTokenException's javadoc.
+     */
+    @ExceptionHandler(MissingOrInvalidTokenException.class)
+    public ProblemDetail handleMissingOrInvalidToken(MissingOrInvalidTokenException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+        problem.setTitle("Missing or invalid credentials");
+        return problem;
+    }
+
+    /**
+     * 404, not 403 — see VenueNotFoundException's javadoc for why "not
+     * yours" and "doesn't exist" must answer identically (ADR-030's
+     * ownership check, IDOR-oracle avoidance).
+     */
+    @ExceptionHandler(VenueNotFoundException.class)
+    public ProblemDetail handleVenueNotFound(VenueNotFoundException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        problem.setTitle("Venue not found");
+        return problem;
+    }
+
+    /** Same 404-not-403 reasoning as venues, one level down — see SectionNotFoundException's javadoc. */
+    @ExceptionHandler(SectionNotFoundException.class)
+    public ProblemDetail handleSectionNotFound(SectionNotFoundException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        problem.setTitle("Section not found");
+        return problem;
+    }
+
+    /**
+     * Field-level validation failures, reported per field — see
+     * auth-service's ApiExceptionHandler for why only the field name and
+     * constraint message are echoed, never the rejected value.
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ProblemDetail handleValidation(MethodArgumentNotValidException e) {
+        Map<String, String> errors = e.getBindingResult().getFieldErrors().stream()
+                .collect(Collectors.toMap(
+                        org.springframework.validation.FieldError::getField,
+                        fieldError -> fieldError.getDefaultMessage() == null
+                                ? "invalid"
+                                : fieldError.getDefaultMessage(),
+                        (first, second) -> first));
+
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+        problem.setTitle("Validation failed");
+        problem.setProperty("errors", errors);
+        return problem;
+    }
+}
