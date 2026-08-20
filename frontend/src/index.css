@@ -191,4 +191,24 @@
       radial-gradient(55% 45% at 85% 20%, oklch(0.72 0.2 330 / 34%) 0%, transparent 62%),
       radial-gradient(60% 55% at 50% 100%, oklch(0.78 0.17 155 / 30%) 0%, transparent 60%);
   }
+
+  /*
+   * Same technique as .auth-backdrop above (fixed, non-interactive, sits
+   * behind everything via z-index -1) with deliberately quieter, cooler
+   * tones and lower saturation/opacity. auth-backdrop's bright three-color
+   * wash suits a one-time arrival moment (sign in, register); a dashboard
+   * gets reloaded and stared at for work all day, so it stays out of the
+   * way instead of making an entrance.
+   */
+  .dashboard-backdrop::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      radial-gradient(50% 40% at 10% 0%, oklch(0.7 0.09 250 / 24%) 0%, transparent 60%),
+      radial-gradient(45% 35% at 90% 15%, oklch(0.72 0.08 200 / 20%) 0%, transparent 62%),
+      radial-gradient(55% 45% at 50% 100%, oklch(0.75 0.06 160 / 16%) 0%, transparent 60%);
+  }
 }

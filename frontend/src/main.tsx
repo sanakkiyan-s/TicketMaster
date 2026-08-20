@@ -5,9 +5,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 
 import { LoginPage } from "@/features/auth/LoginPage";
+import { ProtectedRoute } from "@/features/auth/ProtectedRoute";
 import { RegisterPage } from "@/features/auth/RegisterPage";
 import { useSilentRefresh } from "@/features/auth/useSilentRefresh";
 import { HomePage } from "@/features/home/HomePage";
+import { ArtistsPage } from "@/features/organizer/ArtistsPage";
+import { CreateEventPage } from "@/features/organizer/CreateEventPage";
+import { EventDetailPage } from "@/features/organizer/EventDetailPage";
+import { EventsListPage } from "@/features/organizer/EventsListPage";
 import { useAuthStore } from "@/stores/auth";
 
 const queryClient = new QueryClient({
@@ -82,6 +87,21 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="/" element={<Root />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
+
+            {/*
+              Backend enforces ownership (api-gateway's ORGANIZER role gate,
+              plus event-service's per-resource organizer_id check) — this
+              guard is UX-only, same as every other ProtectedRoute use, not
+              a security boundary. No separate role check here since this
+              app has no client-side role-routing system anywhere yet
+              (brief: don't build one for this slice alone).
+            */}
+            <Route element={<ProtectedRoute />}>
+              <Route path="/organizer/events" element={<EventsListPage />} />
+              <Route path="/organizer/events/new" element={<CreateEventPage />} />
+              <Route path="/organizer/events/:id" element={<EventDetailPage />} />
+              <Route path="/organizer/artists" element={<ArtistsPage />} />
+            </Route>
           </Routes>
         </SessionGate>
       </BrowserRouter>
