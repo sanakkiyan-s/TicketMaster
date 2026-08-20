@@ -38,13 +38,27 @@ groups:
             model:
               type: threshold
               refId: C
+              # Grafana's expression node needs `expression` naming the
+              # query to operate on at the top level - the legacy
+              # `conditions[].query.params` alone isn't enough and fails
+              # with "no variable specified to reference for refId C" at
+              # evaluation time (reproduced live 2026-08-20; the rule
+              # provisioned with no error, so this only surfaced once it
+              # actually evaluated).
+              expression: A
               conditions:
                 - evaluator:
                     type: gt
                     # -1 = Debezium idle (no events since connector
                     # (re)start), not lag - excluded by this threshold
                     # since it will always be < 30000 anyway. Real lag is
-                    # a large positive millisecond count.
+                    # a large positive millisecond count. Live-fire
+                    # tested 2026-08-20 via a temporary lower threshold
+                    # (pause+wait doesn't work: Debezium's lag metric
+                    # only recalculates on a new event, so it freezes
+                    # rather than climbs while the connector is paused)
+                    # - confirmed a genuine, non-error "Alerting" state
+                    # with a real evaluated value before restoring this.
                     params: [30000]
                   operator:
                     type: and

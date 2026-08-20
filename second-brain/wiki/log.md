@@ -1271,12 +1271,30 @@ token proxied through to auth-service.
 - Tracing tool choice (was open in `cross-cutting-concerns.md`) —
   resolved by [[ADR-015-observability-stack]]: OpenTelemetry + Tempo/
   Loki/Mimir.
+- `OutboxStalled` alert rule live-fire status — was open, now resolved:
+  actually live-fire tested (see below), not just config-checked.
+
+### Fixed (real bugs, found live, cont.)
+- The originally-planned live-fire method (pause the connector, generate
+  an outbox event, wait) doesn't work: Debezium's
+  `MilliSecondsBehindSource` only recalculates on a new event, so it
+  freezes at its last value while paused instead of climbing — verified
+  via the raw JMX exporter output, unchanged across a pause+event+wait
+  cycle.
+- Real test method used instead (temporarily lower the alert threshold
+  below the current real value): uncovered that Grafana's threshold
+  expression node needs a top-level `expression: A` field naming the
+  query — `conditions[].query.params` alone isn't enough. Without it the
+  rule provisions with no error but fails at evaluation time
+  (`"failed to parse expression 'C': no variable specified to reference
+  for refId C"`), and Grafana's default `execErrState: Alerting` makes
+  the broken rule look like a false-positive fire. Fixed in
+  `infra/grafana/provisioning/alerting/rules.yml`; after the fix the
+  alert was confirmed to reach a genuine `Alerting` state with a real
+  evaluated value, then reverted cleanly to `inactive` once the
+  threshold was restored to 30000.
 
 ### Opened Questions
-- `OutboxStalled` alert rule is provisioned and correct against real
-  metric names but has not been live-fired end-to-end (needs an outbox
-  event generated while the connector is paused, plus the alert's full
-  5-minute `for` window) — deferred as a manual follow-up.
 - Docker Desktop restarted spontaneously twice during this session
   (unrelated to any command run), taking the whole stack down each time.
   Not investigated further — outside this session's scope — but worth

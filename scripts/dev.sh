@@ -6,8 +6,10 @@
 #
 #   infra/     Postgres (Citus coordinator + worker), PgBouncer, Redis,
 #              Kafka + Schema Registry + Connect, Vault, MinIO.
-#   backend/   auth-service (:8081), api-gateway (:8080), user-service
-#              (:8082) - the only three modules with real sources so far
+#   backend/   auth-service (host :8180, container :8081 - 8081/8083 were
+#              already taken by other local processes), api-gateway
+#              (:8080), user-service (host :8090, container :8082) - the
+#              only three modules with real sources so far
 #              (ADR-036 Phase 1). Built and run as containers via the
 #              same docker-compose.yml, gated behind the "backend"
 #              profile so plain infra startup never pays their build
@@ -223,7 +225,7 @@ print_backend_endpoints() {
   cat <<'EOF'
 
     api-gateway     http://localhost:8080
-    auth-service    http://localhost:8081
+    auth-service    http://localhost:8180   (container's own port is 8081 - host 8081 was already taken by an unrelated local project, and 8083 by kafka-connect's own REST port)
     user-service    http://localhost:8090   (container's own port is 8082 - 8082 is schema-registry's host mapping)
 
 EOF

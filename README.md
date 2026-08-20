@@ -11,20 +11,26 @@ Fast entry points:
 - [`second-brain/wiki/architecture/implementation-roadmap.md`](second-brain/wiki/architecture/implementation-roadmap.md) — full build plan
 - [`second-brain/wiki/decisions/ADR-036-build-order-and-phasing.md`](second-brain/wiki/decisions/ADR-036-build-order-and-phasing.md) — the phase order this repo follows
 
-## This is Phase 0
+## Status: Phase 1 in progress (platform bootstrap done)
 
-This base setup is **platform bootstrap only** (ADR-036) — no product
-code yet. It gives you:
+Phase 0 (ADR-036, platform bootstrap) is done — infra, Gradle skeleton,
+frontend scaffold, `scripts/dev.sh`, and the full
+[observability stack](second-brain/wiki/decisions/ADR-015-observability-stack.md)
+(ADR-015). Phase 1 (identity/edge) is underway: auth-service, api-gateway,
+and user-service have real sources and run as containers. This gives you:
 
 - A Gradle multi-module skeleton, one module per backend service, wired
   into `settings.gradle.kts`, common config in the root `build.gradle.kts`
-  (Java 21, Spring Boot 3.3, gRPC for internal calls per ADR-023).
+  (Java 21, Spring Boot 3.5, gRPC for internal calls per ADR-023).
 - A `docker-compose.yml` (`infra/`) bringing up everything every service
   depends on: Postgres/Citus (+ PgBouncer), Redis, Kafka + Debezium +
-  Schema Registry, Vault, MinIO.
-- A `frontend/` scaffold: Vite + React + TypeScript, React Router,
-  TanStack Query (server state), Zustand (client state), Tailwind +
-  shadcn/ui. Builds and type-checks; no routes or pages yet.
+  Schema Registry, Vault, MinIO — plus the observability stack (OTel
+  Collector, Tempo, Loki, Mimir, Prometheus, Grafana).
+- Three working backend services: auth-service, api-gateway, user-service
+  — each carrying an OpenTelemetry Java agent by default.
+- A `frontend/` app: Vite + React + TypeScript, React Router, TanStack
+  Query, Zustand, Tailwind + shadcn/ui — has a real home/profile screen
+  now, routed through the gateway to user-service.
 - `scripts/dev.sh` to bring the above up together.
 
 ## Quick start
@@ -35,21 +41,30 @@ code yet. It gives you:
 
 Seeds `infra/.env` and `frontend/.env.local` from their `.env.example`
 files (never overwrites an existing one — edit them for non-default
-credentials), starts the infra containers, waits for the four that
-declare a healthcheck to report healthy, then runs the Vite dev server.
+credentials), then brings up infra, backend, observability, and the Vite
+dev server together, waiting for each container that declares a
+healthcheck to report healthy.
 
 ```bash
-./scripts/dev.sh infra      # containers only
-./scripts/dev.sh frontend   # Vite only, assumes infra is already up
-./scripts/dev.sh status     # what is running
-./scripts/dev.sh logs redis # tail one service
-./scripts/dev.sh down       # stop, keep data
-./scripts/dev.sh reset      # stop AND delete volumes (prompts first)
+./scripts/dev.sh infra          # containers only
+./scripts/dev.sh backend        # auth-service/api-gateway/user-service (assumes infra up)
+./scripts/dev.sh observability  # OTel Collector/Tempo/Loki/Mimir/Prometheus/Grafana (assumes infra up)
+./scripts/dev.sh frontend       # Vite only, assumes infra is already up
+./scripts/dev.sh status         # what is running
+./scripts/dev.sh logs redis     # tail one service
+./scripts/dev.sh down           # stop, keep data
+./scripts/dev.sh reset          # stop AND delete volumes (prompts first)
 ```
+
+With no argument, `dev.sh` now brings up infra + backend + observability +
+frontend together.
 
 | | |
 |---|---|
 | Frontend | http://localhost:5173 |
+| api-gateway | http://localhost:8080 |
+| auth-service | http://localhost:8180 — container's own port is 8081; host 8081 was already taken by an unrelated local process, and 8083 by kafka-connect's own REST port |
+| user-service | http://localhost:8090 — container's own port is 8082; host 8082 is schema-registry's mapping |
 | Postgres (coordinator) | localhost:**5433** — remapped, not the default 5432 |
 | PgBouncer | localhost:6432 |
 | Redis | localhost:**6380** — remapped, not the default 6379 |
@@ -57,17 +72,11 @@ declare a healthcheck to report healthy, then runs the Vite dev server.
 | Schema Registry / Connect | localhost:8082 / localhost:8083 |
 | Vault | localhost:8200, token `dev-root-token` |
 | MinIO API / console | localhost:9000 / localhost:9001 |
+| Grafana (ADR-015) | http://localhost:3000, anonymous Admin — dev only |
+| Tempo / Loki / Mimir | localhost:3200 / localhost:3100 / localhost:9009 |
 
-**`dev.sh` starts no backend service.** One now exists — auth-service, on
-:8081 — but it is started separately:
-
-```bash
-./gradlew :backend:auth-service:bootRun
-```
-
-Every other `backend/*` module is still build config only. api-gateway is
-not on :8080, so `/api/*` calls from the frontend fail at the Vite proxy
-even with auth-service up.
+Every other `backend/*` module beyond the three above is still build
+config only.
 
 Gradle modules still compile on their own:
 

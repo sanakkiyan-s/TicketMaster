@@ -46,11 +46,29 @@ gateway):
 - Grafana dashboard (`TicketMaster - Service Overview`: request
   rate/p95 latency/error rate per service, JVM heap/GC, Debezium lag)
   and one alert rule (`OutboxStalled`, >30s lag for 5m) provisioned and
-  loaded by Grafana with no errors. The alert's PromQL and threshold are
-  correct against real metric names; it has **not** been live-fired
-  (would need an outbox event generated while the connector is paused,
-  plus the full 5m `for` window) — deferred as a manual follow-up, not
-  because of any known issue.
+  loaded by Grafana with no errors, and **live-fire tested end to end**
+  on 2026-08-20 — genuinely confirmed, not just config-checked. Two real
+  findings from that test:
+  - The originally-planned test method (pause the connector, generate an
+    outbox event, wait) doesn't exercise the alert at all: Debezium's
+    `MilliSecondsBehindSource` only recalculates when it processes a new
+    event, so it *freezes* at its last value while the connector is
+    paused rather than climbing — a paused connector produces no lag
+    signal, not a growing one. Verified via the raw JMX exporter output
+    before and after a pause+event+wait cycle: value never moved.
+  - The real test method (temporarily lower the threshold below the
+    current real value, confirm Alerting, restore) uncovered a genuine
+    bug: Grafana's threshold expression node needs a top-level
+    `expression: A` field naming which query to operate on —
+    `conditions[].query.params` alone isn't enough. Without it the rule
+    provisions with **no error** but fails at evaluation time
+    (`"failed to parse expression 'C': no variable specified to
+    reference for refId C"`), and Grafana's default
+    `execErrState: Alerting` makes a broken rule look like it fired. Now
+    fixed in `infra/grafana/provisioning/alerting/rules.yml`. After the
+    fix, the alert was confirmed to transition to a genuine `Alerting`
+    state with a real evaluated value (not an error) and reverted
+    cleanly to `inactive` once the threshold was restored to 30000.
 
 **Explicitly deferred, not silently dropped** — this ADR designs against
 domain concepts (bookings, sagas, payments, holds) that don't exist yet:
