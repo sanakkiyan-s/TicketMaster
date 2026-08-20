@@ -113,8 +113,18 @@ services:
 
   # Kafka Connect + Debezium (Transactional Outbox source, ADR-007)
   kafka-connect:
-    image: debezium/connect:2.7.3.Final
+    # Built, not the plain debezium/connect image directly - adds the JMX
+    # Prometheus exporter javaagent (infra/jmx-exporter/) so Debezium's
+    # real MilliSecondsBehindSource metric is scrapeable (ADR-015). No
+    # other change from the base image.
+    build:
+      context: ../infra/jmx-exporter
     environment:
+      # Attaches the exporter without needing debezium/connect's own
+      # entrypoint script to know anything about it - KAFKA_OPTS is
+      # picked up by the underlying Kafka launch scripts this image
+      # already uses.
+      KAFKA_OPTS: -javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent.jar=9404:/opt/jmx-exporter/config.yaml
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: ticketmaster-connect
       CONFIG_STORAGE_TOPIC: connect_configs
@@ -190,8 +200,15 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       JWT_KEY_SOURCE: vault
       JWT_VAULT_BOOTSTRAP: "true"
+      OTEL_SERVICE_NAME: auth-service
     ports:
-      - "8081:8081"
+      # Host side moved off 8081: an unrelated project
+      # (stockz11-mongo-express) already owns host:8081, discovered live
+      # 2026-08-20 - port stays 8081 inside the container and on the
+      # compose network (AUTH_SERVICE_URI/JWKS_URI below still point at
+      # auth-service:8081), only the host-facing port changes. 8083 was
+      # also taken (kafka-connect's own REST port), landed on 8180.
+      - "8180:8081"
     depends_on:
       postgres-coordinator:
         condition: service_healthy
@@ -222,6 +239,7 @@ services:
       AUTH_SERVICE_URI: http://auth-service:8081
       JWKS_URI: http://auth-service:8081/.well-known/jwks.json
       USER_SERVICE_URI: http://user-service:8082
+      OTEL_SERVICE_NAME: api-gateway
     ports:
       - "8080:8080"
     depends_on:
@@ -250,6 +268,7 @@ services:
     environment:
       DB_HOST: postgres-coordinator
       DB_PORT: "5432"
+      OTEL_SERVICE_NAME: user-service
     ports:
       # Host 8082 is already schema-registry's (see above) - only the
       # host-side mapping changes, the container's own port stays 8082
@@ -265,6 +284,107 @@ services:
       timeout: 5s
       retries: 20
       start_period: 30s
+
+  # --- Observability (ADR-015) ---------------------------------------
+  # Gated behind the "observability" profile, same reasoning as
+  # "backend": `docker compose up` never pays for 7 extra containers
+  # unless asked. `docker compose --profile observability up`
+  # (dev.sh's `observability` command) does. Filesystem storage for
+  # Tempo/Loki/Mimir, not MinIO/S3 - see infra/tempo/tempo.yaml's header
+  # for why.
+  otel-collector:
+    profiles: ["observability"]
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    command: ["--config=/etc/otel-collector/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otel-collector/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+
+  tempo:
+    profiles: ["observability"]
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"
+
+  loki:
+    profiles: ["observability"]
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+
+  mimir:
+    profiles: ["observability"]
+    image: grafana/mimir:2.14.0
+    command: ["-config.file=/etc/mimir/mimir.yaml"]
+    volumes:
+      - ./mimir/mimir.yaml:/etc/mimir/mimir.yaml:ro
+      - mimir_data:/data
+    ports:
+      - "9009:8080"
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.55.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--enable-feature=agent"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      mimir:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+
+  # The exporter ADR-004 already assumes and ADR-015 explicitly requires
+  # preserving. Watches the single local Redis instance - the ADR-004
+  # StatefulSet/reshard-controller design is k8s/cluster-specific and out
+  # of scope until Redis actually clusters.
+  redis-exporter:
+    profiles: ["observability"]
+    image: oliver006/redis_exporter:v1.66.0
+    environment:
+      REDIS_ADDR: redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      mimir:
+        condition: service_started
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
 
   # --- MinIO (S3-compatible object storage, ADR-017) ---
   minio:
@@ -288,3 +408,7 @@ volumes:
   pg_coordinator_data:
   pg_worker1_data:
   minio_data:
+  tempo_data:
+  loki_data:
+  mimir_data:
+  grafana_data:

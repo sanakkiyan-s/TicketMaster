@@ -1,0 +1,32 @@
+# Agent mode (--enable-feature=agent on the container command): no local
+# retention or query UI by design - this scrapes and remote_writes to
+# Mimir, per ADR-015's literal "Prometheus (agent mode) -> Mimir" choice.
+# Grafana queries Mimir, never this instance directly.
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Every service's OTLP metrics land here via the collector's
+  # `prometheus` exporter (infra/otel-collector/config.yaml) - one scrape
+  # target covers auth-service/api-gateway/user-service, and every future
+  # service the moment it starts exporting OTLP metrics too.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  # ADR-004's Prometheus + Redis exporter assumption, preserved per
+  # ADR-015's explicit requirement not to break it.
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  # Debezium's real MilliSecondsBehindSource metric, via the JMX exporter
+  # javaagent attached to kafka-connect (infra/docker-compose.yml) - what
+  # makes the OutboxStalled alert and the replication-lag panel real data.
+  - job_name: kafka-connect
+    static_configs:
+      - targets: ["kafka-connect:9404"]
+
+remote_write:
+  - url: http://mimir:8080/api/v1/push

@@ -13,17 +13,25 @@
 #              profile so plain infra startup never pays their build
 #              time. The other 12 backend/* directories hold build
 #              files only - nothing to run.
+#   observability/ OTel Collector, Tempo, Loki, Mimir, Prometheus (agent
+#              mode), redis-exporter, Grafana (:3000) - ADR-015. Gated
+#              behind the "observability" profile, same reasoning as
+#              "backend". The 3 backend services export OTLP to the
+#              collector whenever it's running; nothing breaks if it
+#              isn't (the OTel agent just drops telemetry and logs a
+#              warning).
 #   frontend/  Vite dev server on :5173.
 #
 # Usage:
-#   ./scripts/dev.sh            infra + backend + frontend (default)
-#   ./scripts/dev.sh infra      containers only
-#   ./scripts/dev.sh backend    auth-service/api-gateway/user-service (assumes infra already up)
-#   ./scripts/dev.sh frontend   Vite only (assumes infra already up)
-#   ./scripts/dev.sh down       stop containers
-#   ./scripts/dev.sh reset      stop containers AND delete volumes
-#   ./scripts/dev.sh status     what is running
-#   ./scripts/dev.sh logs [svc] tail container logs
+#   ./scripts/dev.sh                infra + backend + observability + frontend (default)
+#   ./scripts/dev.sh infra          containers only
+#   ./scripts/dev.sh backend        auth-service/api-gateway/user-service (assumes infra already up)
+#   ./scripts/dev.sh observability  Collector/Tempo/Loki/Mimir/Prometheus/Grafana (assumes infra already up)
+#   ./scripts/dev.sh frontend       Vite only (assumes infra already up)
+#   ./scripts/dev.sh down           stop containers
+#   ./scripts/dev.sh reset          stop containers AND delete volumes
+#   ./scripts/dev.sh status         what is running
+#   ./scripts/dev.sh logs [svc]     tail container logs
 
 set -euo pipefail
 
@@ -41,6 +49,15 @@ HEALTHCHECKED=(postgres-coordinator postgres-worker-1 redis minio)
 # curl for exactly this) - same wait_for_health mechanism as infra,
 # different list, since these only run under the "backend" profile.
 BACKEND_HEALTHCHECKED=(auth-service api-gateway user-service)
+
+# None of the observability images declare a container healthcheck
+# (Tempo/Loki/Mimir/Grafana's base images don't reliably ship curl or
+# wget, unlike the backend Dockerfile which installs curl on purpose) -
+# so there's nothing for wait_for_health to wait ON here. Verification
+# for this profile is the live curl-based checks in
+# second-brain/wiki/decisions/ADR-015-observability-stack.md's
+# verification-status note, not a container health flag.
+OBSERVABILITY_SERVICES=(otel-collector tempo loki mimir prometheus redis-exporter grafana)
 
 WAIT_TIMEOUT_SECONDS=180
 
@@ -212,6 +229,19 @@ print_backend_endpoints() {
 EOF
 }
 
+print_observability_endpoints() {
+  cat <<'EOF'
+
+    Grafana                 http://localhost:3000   (anonymous access, Admin role - dev only)
+    Prometheus (agent mode) http://localhost:9090    no query UI by design, remote_writes to Mimir
+    Mimir                   http://localhost:9009
+    Tempo                   http://localhost:3200
+    Loki                    http://localhost:3100
+    OTel Collector          http://localhost:4317 (grpc) / :4318 (http)
+
+EOF
+}
+
 # compose gets the env file via --env-file, but this script's own checks
 # need the same values. Sourced with `set -a` so every assignment is
 # exported to the docker invocations below.
@@ -258,6 +288,20 @@ start_backend() {
   print_backend_endpoints
 }
 
+start_observability() {
+  require_tools
+
+  info "starting observability containers (Collector, Tempo, Loki, Mimir, Prometheus, redis-exporter, Grafana)"
+  compose --profile observability up --detach --build
+
+  info "waiting for containers to start (no container healthchecks - see comment on OBSERVABILITY_SERVICES)"
+  for service in "${OBSERVABILITY_SERVICES[@]}"; do
+    compose ps --quiet "$service" >/dev/null 2>&1 || warn "$service did not start - check:  ./scripts/dev.sh logs $service"
+  done
+
+  print_observability_endpoints
+}
+
 start_frontend() {
   require_node
   seed_env "$ROOT/frontend/.env.local" "$ROOT/frontend/.env.example"
@@ -282,6 +326,7 @@ case "${1:-all}" in
   all)
     start_infra
     start_backend
+    start_observability
     start_frontend
     ;;
   infra)
@@ -290,6 +335,9 @@ case "${1:-all}" in
     ;;
   backend)
     start_backend
+    ;;
+  observability)
+    start_observability
     ;;
   frontend)
     start_frontend
@@ -317,6 +365,6 @@ case "${1:-all}" in
     compose logs --follow --tail 100 "$@"
     ;;
   *)
-    die "unknown command '${1}'. try: all | infra | backend | frontend | down | reset | status | logs"
+    die "unknown command '${1}'. try: all | infra | backend | observability | frontend | down | reset | status | logs"
     ;;
 esac

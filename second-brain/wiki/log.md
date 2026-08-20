@@ -1201,3 +1201,83 @@ token proxied through to auth-service.
   configured) is never touched by either limiter.
 - 54 tests green across the whole repo; ./gradlew build passes on all 15
   modules.
+
+## 2026-08-20
+
+### Added
+- Full [[ADR-015-observability-stack]] infra pipeline, built and verified
+  live: `otel-collector`, `tempo`, `loki`, `mimir`, `prometheus` (agent
+  mode), `redis-exporter`, `grafana`, all gated behind a new
+  `observability` compose profile. OTel Java agent wired into
+  `backend/Dockerfile` (shared by all 3 services, no per-service code).
+  Grafana datasources (Mimir/Tempo/Loki, with exemplar/derived-field
+  correlation), one dashboard (`TicketMaster - Service Overview`), one
+  alert rule (`OutboxStalled`).
+- JMX Prometheus exporter on kafka-connect's own image
+  (`infra/jmx-exporter/`) — makes Debezium's real replication-lag metric
+  scrapeable.
+- `spring.datasource.hikari.initialization-fail-timeout: 30000` in both
+  auth-service's and user-service's `application.yml` — Spring Boot's own
+  default (1 = fail on first connection attempt, zero retry) turned a
+  transient startup-window DNS blip into a hard crash-loop.
+
+### Fixed (real bugs, found live)
+- auth-service's repeated post-restart crash-loop was not actually a DNS
+  problem — it was the Hikari zero-retry default above, surfaced reliably
+  by auth-service's heavier concurrent startup (Kafka/Vault/Redis clients
+  alongside JDBC) vs. user-service's lighter one.
+- Once that was fixed, the *real* auth-service failure was a host-port
+  collision: an unrelated local project already held host `8081` (and
+  `8083` was independently taken by kafka-connect's own REST port).
+  Remapped auth-service's host mapping to `8180:8081` in
+  `infra/docker-compose.yml` — container-internal port and all in-network
+  URLs (`AUTH_SERVICE_URI`, `JWKS_URI`) unaffected.
+- jmx_exporter Dockerfile: pinned release version (1.0.1) didn't exist
+  (404) — corrected to the real latest, 1.6.0. Separately, `ADD --chmod=`
+  on a URL that implicitly creates its parent directory applies that same
+  restrictive mode to the directory too, stripping the execute/search bit
+  — fixed by doing the copy as `root` and `chmod`ing the directory
+  (755) separately from the files (644), then restoring the original
+  non-root `kafka` user.
+- Mimir's ingester/store-gateway rings default to `replication_factor: 3`
+  — with one process, every write and every read failed outright ("at
+  least 2 live replicas required" / "too many unhealthy instances in the
+  ring") until `infra/mimir/mimir.yaml` explicitly set
+  `replication_factor: 1` on both rings.
+
+### Decisions
+- Single-Collector topology instead of ADR-015's literal two-tier
+  agent/gateway split — the two-tier design exists for tail-sampling at
+  horizontal scale, irrelevant at 3-service/single-host scale. Every
+  service points at "the collector" via one env var, so this is a
+  topology change later, not an app change.
+- Filesystem storage (not MinIO/S3) for Tempo/Loki/Mimir, even though
+  MinIO already runs for other purposes — each tool's documented simplest
+  local mode, avoids S3 path-style/bucket-policy config risk for no real
+  benefit at this scale.
+
+### Changed
+- `second-brain/wiki/projects/infra.md` — was badly stale ("Not started,
+  empty directory" as of 2026-08-05); rewritten against actual
+  `docker-compose.yml` state.
+- `second-brain/wiki/concepts/cross-cutting-concerns.md`'s tracing
+  section — resolved from "tooling not yet decided" to ADR-015; also
+  corrected a factual error found while updating it: the originally
+  planned custom correlation-ID-at-the-gateway mechanism was never
+  actually implemented (`backend/api-gateway/src` has no correlation-ID
+  code) and is superseded by OTel's own `traceparent` propagation.
+
+### Resolved Questions
+- Tracing tool choice (was open in `cross-cutting-concerns.md`) —
+  resolved by [[ADR-015-observability-stack]]: OpenTelemetry + Tempo/
+  Loki/Mimir.
+
+### Opened Questions
+- `OutboxStalled` alert rule is provisioned and correct against real
+  metric names but has not been live-fired end-to-end (needs an outbox
+  event generated while the connector is paused, plus the alert's full
+  5-minute `for` window) — deferred as a manual follow-up.
+- Docker Desktop restarted spontaneously twice during this session
+  (unrelated to any command run), taking the whole stack down each time.
+  Not investigated further — outside this session's scope — but worth
+  knowing this environment does that.

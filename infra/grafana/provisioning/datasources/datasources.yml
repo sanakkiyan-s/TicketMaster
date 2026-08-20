@@ -1,0 +1,44 @@
+apiVersion: 1
+
+datasources:
+  - name: Mimir
+    type: prometheus
+    access: proxy
+    url: http://mimir:8080/prometheus
+    uid: mimir
+    isDefault: true
+    jsonData:
+      # Metric -> trace: a histogram bucket's exemplar carries a trace ID,
+      # click-through lands in Tempo. Cheap to wire now, expensive to
+      # retrofit once dashboards exist.
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+
+  - name: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    uid: tempo
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        filterByTraceID: true
+      serviceMap:
+        datasourceUid: mimir
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    uid: loki
+    jsonData:
+      # trace_id is attached to every log line by the OTel Java agent's
+      # Logback instrumentation (see backend/Dockerfile) - this is what
+      # makes "same trace_id in Tempo and Loki" (the plan's verification
+      # step 4) clickable rather than a manual copy-paste.
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: "trace_id=(\\w+)"
+          name: TraceID
+          url: "$${__value.raw}"

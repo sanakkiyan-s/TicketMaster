@@ -1,0 +1,62 @@
+# Single collector, not the ADR-015 two-tier agent/gateway split - see
+# second-brain/wiki/decisions/ADR-015-observability-stack.md's
+# verification-status note for why. Every service points at "the
+# collector" via one env var, so upgrading to two-tier later is a
+# topology change here, not an application change.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 400
+    spike_limit_mib: 100
+  batch: {}
+  # ADR-015's cardinality rule: no seat_id/user_id/booking_id/session_id
+  # as a Prometheus label, ever. Nothing in this codebase emits those
+  # today (no booking/inventory service exists), so this is a forward
+  # guard, not a fix for a current violation - cheap to put in place now,
+  # expensive to retrofit once 14 services are all emitting metrics.
+  attributes/drop-high-cardinality:
+    actions:
+      - key: user_id
+        action: delete
+      - key: seat_id
+        action: delete
+      - key: booking_id
+        action: delete
+      - key: session_id
+        action: delete
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/drop-high-cardinality, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/drop-high-cardinality, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

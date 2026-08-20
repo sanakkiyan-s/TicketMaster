@@ -17,6 +17,19 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:ticketmaster}
     username: ${DB_USER:ticketmaster}
     password: ${DB_PASSWORD:ticketmaster}
+    hikari:
+      # Spring Boot's own default (1 = fail on the very first connection
+      # attempt, no retry) means a single transient DNS/network blip during
+      # container startup crashes the whole service instead of the pool
+      # just trying again - reproduced live 2026-08-20 recovering this
+      # stack after a Docker Desktop restart: auth-service's heavier
+      # startup (Kafka/Vault/Redis clients all initializing alongside JDBC)
+      # hit exactly this window repeatedly while user-service, with a
+      # lighter startup, never did. 30s gives the pool room to retry
+      # through a brief resolution hiccup without masking a real outage -
+      # Flyway/actuator readiness still fails loudly if Postgres is
+      # actually down for that whole window.
+      initialization-fail-timeout: 30000
 
   jpa:
     hibernate:

@@ -1,0 +1,12 @@
+# Catch-all jmx_exporter rule set. Debezium/Kafka Connect expose metrics
+# across many nested MBean names (connector-level, task-level, per
+# connector); a hand-curated allowlist would need updating every time a
+# connector is added. This exports everything reflectively - what makes
+# Debezium's real MilliSecondsBehindSource metric (the number the
+# OutboxStalled alert and the replication-lag panel need) show up without
+# guessing the exact MBean path in advance. Can be tightened to an
+# allowlist later if the metric volume ever matters.
+startDelaySeconds: 0
+lowercaseOutputName: true
+rules:
+  - pattern: ".*"
