@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -51,6 +52,17 @@ public class SessionService {
         Session session = findInEvent(eventId, sessionId);
         session.cancel(Instant.now(clock));
         return session;
+    }
+
+    /**
+     * Public read, no ownership check — same "no CurrentUserResolver"
+     * carve-out as search-service's EventSearchController. Returns
+     * sessions regardless of the parent event's status (including DRAFT),
+     * matching the existing documented gap on that public surface rather
+     * than introducing a new inconsistency here.
+     */
+    List<Session> listSessionsForEvent(UUID eventId) {
+        return sessions.findByEventId(eventId);
     }
 
     private Session findInEvent(UUID eventId, UUID sessionId) {

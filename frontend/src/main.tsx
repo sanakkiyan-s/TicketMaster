@@ -10,6 +10,7 @@ import { ProtectedRoute } from "@/features/auth/ProtectedRoute";
 import { RegisterPage } from "@/features/auth/RegisterPage";
 import { useSilentRefresh } from "@/features/auth/useSilentRefresh";
 import { BrowsePage } from "@/features/browse/BrowsePage";
+import { EventDetailPage as PublicEventDetailPage } from "@/features/browse/EventDetailPage";
 import { HomePage } from "@/features/home/HomePage";
 import { ArtistsPage } from "@/features/organizer/ArtistsPage";
 import { CreateEventPage } from "@/features/organizer/CreateEventPage";
@@ -75,6 +76,7 @@ enableMocking().then(() => {
                 their own routes below instead of living at "/".
               */}
               <Route path="/" element={<BrowsePage />} />
+              <Route path="/events/:eventId" element={<PublicEventDetailPage />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/register" element={<RegisterPage />} />
 

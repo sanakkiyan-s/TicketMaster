@@ -118,6 +118,17 @@ spring:
             # order, first match wins, so this more specific one must
             # come immediately after event-service's.
             - Path=/api/v1/organizer/venues/**
+        - id: event-service-public-sessions
+          uri: ${EVENT_SERVICE_URI:http://localhost:8084}
+          predicates:
+            # PublicSessionController - must come before search-service's
+            # /api/v1/events/** catch-all below (list order, first match
+            # wins), same narrowing reasoning as venue-service above
+            # event-service's organizer route. Also public (gateway.jwt.
+            # public-paths' "/api/v1/events" entry is a startsWith prefix,
+            # so it already covers this path too - no config change needed
+            # there).
+            - Path=/api/v1/events/*/sessions
         - id: search-service
           uri: ${SEARCH_SERVICE_URI:http://localhost:8086}
           predicates:

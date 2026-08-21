@@ -14,3 +14,18 @@ export interface BrowseEvent {
   status: string;
   region: string;
 }
+
+/**
+ * Mirrors event-service's SessionResponse (public read via
+ * PublicSessionController — see that class's javadoc for the same
+ * public-carve-out reasoning as EventSearchController above).
+ */
+export interface BrowseSession {
+  id: string;
+  eventId: string;
+  startsAt: string;
+  endsAt: string | null;
+  status: "SCHEDULED" | "ON_SALE" | "CANCELLED" | "COMPLETED";
+  onSaleAt: string | null;
+  highDemand: boolean;
+}

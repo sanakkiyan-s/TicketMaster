@@ -112,51 +112,95 @@ export function BrowsePage() {
           </label>
         </section>
 
-        <section className="flex flex-col gap-4">
-          <div className="flex items-baseline justify-between">
-            <h2 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">
-              {query.trim() ? `Results for "${query.trim()}"` : "All events"}
-            </h2>
-            {events.isSuccess ? (
-              <span className="text-sm text-muted-foreground">{published.length} on sale</span>
-            ) : null}
+        {events.isLoading ? (
+          <div className="glass-panel flex items-center justify-center gap-2 rounded-xl p-12 text-muted-foreground">
+            <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+            Loading events…
           </div>
+        ) : null}
 
-          {events.isLoading ? (
-            <div className="glass-panel flex items-center justify-center gap-2 rounded-xl p-12 text-muted-foreground">
-              <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-              Loading events…
-            </div>
-          ) : null}
+        {events.isError ? (
+          <div className="glass-panel rounded-xl p-12 text-center text-muted-foreground">
+            Couldn't load events right now. Try again shortly.
+          </div>
+        ) : null}
 
-          {events.isError ? (
-            <div className="glass-panel rounded-xl p-12 text-center text-muted-foreground">
-              Couldn't load events right now. Try again shortly.
-            </div>
-          ) : null}
+        {events.isSuccess && published.length === 0 ? (
+          <div className="glass-panel rounded-xl p-12 text-center text-muted-foreground">
+            {query.trim() ? "No events match that search." : "No events on sale yet."}
+          </div>
+        ) : null}
 
-          {events.isSuccess && published.length === 0 ? (
-            <div className="glass-panel rounded-xl p-12 text-center text-muted-foreground">
-              {query.trim() ? "No events match that search." : "No events on sale yet."}
+        {query.trim() && published.length > 0 ? (
+          <section className="flex flex-col gap-4">
+            <div className="flex items-baseline justify-between">
+              <h2 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">
+                Results for "{query.trim()}"
+              </h2>
+              <span className="text-sm text-muted-foreground">{published.length} on sale</span>
             </div>
-          ) : null}
+            <EventGrid events={published} />
+          </section>
+        ) : null}
 
-          {published.length > 0 ? (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {published.map((event) => (
-                <EventCard key={event.eventId} event={event} />
-              ))}
-            </div>
-          ) : null}
-        </section>
+        {!query.trim() && published.length > 0 ? (
+          <div className="flex flex-col gap-10">
+            {groupByRegion(published).map(([region, regionEvents]) => (
+              <section key={region} className="flex flex-col gap-4">
+                <div className="flex items-baseline justify-between">
+                  <h2 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">
+                    On sale near {region}
+                  </h2>
+                  <span className="text-sm text-muted-foreground">{regionEvents.length} events</span>
+                </div>
+                <EventGrid events={regionEvents} />
+              </section>
+            ))}
+          </div>
+        ) : null}
       </div>
     </main>
   )
 }
 
+/**
+ * search-service's index carries only eventId/organizerId/venueId/title/
+ * status/region (see types.ts) — no dates, category, or images, so "curated
+ * sections" here means grouping by the one real axis available (region)
+ * rather than fabricating "trending"/"new this week" buckets the backend
+ * can't actually back. Sorted by event count descending so the busiest
+ * region leads.
+ */
+function groupByRegion(events: BrowseEvent[]): Array<[string, BrowseEvent[]]> {
+  const groups = new Map<string, BrowseEvent[]>()
+  for (const event of events) {
+    const key = event.region || "Other"
+    const existing = groups.get(key)
+    if (existing) {
+      existing.push(event)
+    } else {
+      groups.set(key, [event])
+    }
+  }
+  return Array.from(groups.entries()).sort((a, b) => b[1].length - a[1].length)
+}
+
+function EventGrid({ events }: { events: BrowseEvent[] }) {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {events.map((event) => (
+        <EventCard key={event.eventId} event={event} />
+      ))}
+    </div>
+  )
+}
+
 function EventCard({ event }: { event: BrowseEvent }) {
   return (
-    <article className="glass-panel flex flex-col gap-4 rounded-xl p-6 transition-transform hover:-translate-y-1">
+    <Link
+      to={`/events/${event.eventId}`}
+      className="glass-panel flex flex-col gap-4 rounded-xl p-6 transition-transform hover:-translate-y-1"
+    >
       <div className="flex items-start justify-between gap-3">
         <h3 className="text-xl leading-snug font-semibold tracking-tight">{event.title}</h3>
         <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
@@ -164,6 +208,6 @@ function EventCard({ event }: { event: BrowseEvent }) {
         </span>
       </div>
       <p className="text-sm text-muted-foreground">{event.region}</p>
-    </article>
+    </Link>
   )
 }
