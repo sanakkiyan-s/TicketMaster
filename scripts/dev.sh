@@ -276,7 +276,54 @@ start_infra() {
     die "the coordinator is healthy but localhost:$HOST_PG_PORT does not reach it"
   fi
 
+  register_kafka_connectors
+
   print_endpoints
+}
+
+# Kafka Connect has no container healthcheck (see HEALTHCHECKED's comment),
+# so poll its REST API directly rather than waiting on docker's health
+# state. Connector registration is otherwise a fully manual `curl -X POST`
+# step done by hand every time a fresh Postgres/Kafka volume comes up
+# (real gap, bit this project twice: a local outage where the connector
+# silently stopped forwarding, and a fresh Codespace where no connector
+# had ever been registered at all) — idempotent by name, safe to call on
+# every `infra` start.
+register_kafka_connectors() {
+  local connect_url="http://localhost:8083"
+  local deadline=$(( SECONDS + WAIT_TIMEOUT_SECONDS ))
+
+  printf '    %-22s' "kafka-connect REST"
+  until curl --silent --fail --output /dev/null "$connect_url/connectors" 2>/dev/null; do
+    if (( SECONDS > deadline )); then
+      printf '\033[0;31mtimeout\033[0m\n'
+      warn "kafka-connect REST API did not become ready in ${WAIT_TIMEOUT_SECONDS}s — connectors not registered"
+      return 1
+    fi
+    sleep 2
+  done
+  printf '\033[0;32mready\033[0m\n'
+
+  local config_file connector_name status
+  for config_file in "$ROOT"/infra/kafka-connect/*.json; do
+    [[ -f "$config_file" ]] || continue
+    connector_name="$(grep -m1 '"name"' "$config_file" | sed -E 's/.*"name"\s*:\s*"([^"]+)".*/\1/')"
+    [[ -n "$connector_name" ]] || { warn "could not read connector name from $config_file — skipping"; continue; }
+
+    status="$(curl --silent --output /dev/null --write-out '%{http_code}' "$connect_url/connectors/$connector_name/status")"
+    if [[ "$status" == "200" ]]; then
+      info "  $connector_name already registered"
+      continue
+    fi
+
+    info "  registering $connector_name"
+    if ! curl --silent --fail --show-error \
+        --request POST "$connect_url/connectors" \
+        --header 'Content-Type: application/json' \
+        --data @"$config_file" --output /dev/null; then
+      warn "  failed to register $connector_name — check:  curl $connect_url/connectors/$connector_name/status"
+    fi
+  done
 }
 
 start_backend() {

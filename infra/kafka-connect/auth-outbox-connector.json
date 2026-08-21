@@ -10,6 +10,7 @@
 
     "topic.prefix": "authservice",
     "slot.name": "auth_service_outbox_slot",
+    "publication.name": "auth_service_outbox_publication",
     "publication.autocreate.mode": "filtered",
     "plugin.name": "pgoutput",
 

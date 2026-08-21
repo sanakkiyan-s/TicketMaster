@@ -10,6 +10,7 @@
 
     "topic.prefix": "venueservice",
     "slot.name": "venue_service_outbox_slot",
+    "publication.name": "venue_service_outbox_publication",
     "publication.autocreate.mode": "filtered",
     "plugin.name": "pgoutput",
 
