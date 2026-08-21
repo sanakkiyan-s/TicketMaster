@@ -281,6 +281,12 @@ start_infra() {
 
 start_backend() {
   require_tools
+  # `infra` normally seeds infra/.env first; `backend` must not assume
+  # that happened - a fresh checkout (e.g. a Codespace that never ran
+  # `infra`) hits "couldn't find env file" from compose otherwise. Same
+  # idempotent seed_env/load_env pair start_infra already uses.
+  seed_env "$ENV_FILE" "$ROOT/infra/.env.example"
+  load_env
 
   # Deliberately ONE service at a time, never `--build` on the `up` line.
   # `compose --profile backend up --detach --build` looks scoped but isn't:
