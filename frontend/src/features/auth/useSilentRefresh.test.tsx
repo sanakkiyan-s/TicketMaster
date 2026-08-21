@@ -32,9 +32,27 @@ describe("useSilentRefresh", () => {
 
     expect(apiPost).toHaveBeenCalledWith("/api/v1/auth/refresh", undefined)
     expect(useAuthStore.getState().accessToken).toBe("recovered-token")
-    // RefreshResponse carries no user object — user stays null rather than
-    // being fabricated from JWT claims that don't include an email.
+    // "recovered-token" isn't a real JWT, so decodeAccessTokenClaims can't
+    // extract roles from it and user stays null — see the JWT-shaped-token
+    // test below for the populated case.
     expect(useAuthStore.getState().user).toBeNull()
+  })
+
+  it("backfills id/roles from the access token's claims on success", async () => {
+    // header.payload.signature — payload is base64url({"sub":"user:abc-123","roles":["ORGANIZER"]})
+    const payload = btoa(JSON.stringify({ sub: "user:abc-123", roles: ["ORGANIZER"] }))
+    const jwtShapedToken = `header.${payload}.signature`
+
+    vi.mocked(apiPost).mockResolvedValue({
+      accessToken: jwtShapedToken,
+      tokenType: "Bearer",
+      expiresIn: 600,
+    })
+
+    const { result } = renderHook(() => useSilentRefresh())
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(useAuthStore.getState().user).toEqual({ id: "abc-123", roles: ["ORGANIZER"] })
   })
 
   it("stays logged out, without throwing, when refresh fails", async () => {

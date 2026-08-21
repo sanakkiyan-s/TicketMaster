@@ -2,6 +2,7 @@ package com.ticketmaster.event.shared;
 
 import com.ticketmaster.event.artist.ArtistNotFoundException;
 import com.ticketmaster.event.event.EventNotFoundException;
+import com.ticketmaster.event.event.InvalidEventStateException;
 import com.ticketmaster.event.session.SessionNotFoundException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -48,6 +49,15 @@ public class ApiExceptionHandler {
     public ProblemDetail handleSessionNotFound(SessionNotFoundException e) {
         ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
         problem.setTitle("Session not found");
+        return problem;
+    }
+
+    /** 409 — the transition isn't allowed from the event's current status. See InvalidEventStateException's javadoc. */
+    @ExceptionHandler(InvalidEventStateException.class)
+    public ProblemDetail handleInvalidEventState(InvalidEventStateException e) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        problem.setTitle("Invalid event state transition");
+        problem.setDetail(e.getMessage());
         return problem;
     }
 

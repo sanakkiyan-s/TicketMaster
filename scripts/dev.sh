@@ -51,7 +51,7 @@ HEALTHCHECKED=(postgres-coordinator postgres-worker-1 redis minio)
 # Backend containers declare their own healthcheck (Dockerfile installs
 # curl for exactly this) - same wait_for_health mechanism as infra,
 # different list, since these only run under the "backend" profile.
-BACKEND_HEALTHCHECKED=(auth-service api-gateway user-service event-service venue-service search-service)
+BACKEND_HEALTHCHECKED=(auth-service api-gateway user-service event-service venue-service search-service inventory-service)
 
 # None of the observability images declare a container healthcheck
 # (Tempo/Loki/Mimir/Grafana's base images don't reliably ship curl or
@@ -282,9 +282,26 @@ start_infra() {
 start_backend() {
   require_tools
 
-  info "building and starting backend containers (auth-service, api-gateway, user-service)"
-  info "first build compiles the whole Gradle multi-module tree - can take a few minutes"
-  compose --profile backend up --detach --build
+  # Deliberately ONE service at a time, never `--build` on the `up` line.
+  # `compose --profile backend up --detach --build` looks scoped but isn't:
+  # Compose's BuildKit bake step builds every image tagged with the invoked
+  # profile before it ever looks at which services `up` was asked to start,
+  # so it always builds all 6 (auth/api-gateway/user/event/venue/search)
+  # concurrently regardless of profile filtering. That's 5-6 concurrent
+  # `gradle --no-daemon bootJar` JVMs, each 500MB-1.5GB+ mid-compile, inside
+  # WSL2's default ~50%-of-host memory cap (no committed .wslconfig raises
+  # it) - on a 16GB/4-core dev machine that reliably OOMs the WSL2 backend
+  # (`rpc error: ...EOF` from buildx), reproduced repeatedly. Building
+  # sequentially first, then starting from already-built images, keeps
+  # exactly one Gradle JVM alive at a time during the expensive part.
+  info "building backend images one at a time (concurrent builds OOM this machine's WSL2 VM - see comment above)"
+  for service in "${BACKEND_HEALTHCHECKED[@]}"; do
+    info "  building $service"
+    compose --profile backend build "$service"
+  done
+
+  info "starting backend containers"
+  compose --profile backend up --detach --no-build
 
   info "waiting for health"
   if ! wait_for_health "${BACKEND_HEALTHCHECKED[@]}"; then

@@ -91,4 +91,10 @@ public class Event {
         this.status = EventStatus.CANCELLED;
         this.updatedAt = now;
     }
+
+    /** DRAFT -> PUBLISHED. Guarded in EventService.publishEvent, not here — see its javadoc. */
+    public void publish(Instant now) {
+        this.status = EventStatus.PUBLISHED;
+        this.updatedAt = now;
+    }
 }

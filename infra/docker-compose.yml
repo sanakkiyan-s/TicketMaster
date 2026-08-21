@@ -241,6 +241,8 @@ services:
       USER_SERVICE_URI: http://user-service:8082
       EVENT_SERVICE_URI: http://event-service:8084
       VENUE_SERVICE_URI: http://venue-service:8085
+      SEARCH_SERVICE_URI: http://search-service:8086
+      INVENTORY_SERVICE_URI: http://inventory-service:8088
       OTEL_SERVICE_NAME: api-gateway
     ports:
       - "8080:8080"
@@ -256,6 +258,10 @@ services:
       event-service:
         condition: service_healthy
       venue-service:
+        condition: service_healthy
+      search-service:
+        condition: service_healthy
+      inventory-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
@@ -384,6 +390,42 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8086/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  inventory-service:
+    profiles: ["backend"]
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        MODULE: inventory-service
+    environment:
+      DB_HOST: postgres-coordinator
+      DB_PORT: "5432"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # schema-registry's own container port is 8081 - 8082 is only its
+      # host-side mapping (see schema-registry's own block above), so
+      # inside this network it's :8081.
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      OTEL_SERVICE_NAME: inventory-service
+    ports:
+      - "8088:8088"
+    depends_on:
+      postgres-coordinator:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      schema-registry:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/actuator/health"]
       interval: 5s
       timeout: 5s
       retries: 20

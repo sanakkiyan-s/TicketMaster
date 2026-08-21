@@ -1,12 +1,31 @@
 import * as React from "react"
 
 import { ApiError, apiPost } from "@/lib/api"
+import { decodeAccessTokenClaims } from "@/lib/jwtClaims"
 import { useAuthStore } from "@/stores/auth"
 
 interface RefreshResponse {
   accessToken: string
   tokenType: string
   expiresIn: number
+}
+
+// Refresh tokens are single-use (RefreshController.java: presenting one
+// twice is treated as theft and revokes the whole session family). React.
+// StrictMode double-invokes effects in dev, which fires this hook's effect
+// twice on mount; without dedupe that sends two /refresh requests with the
+// same cookie, and the second one gets treated as a replay and signs the
+// user back out. Module-level (not component-level) so it survives the
+// mount/unmount/remount StrictMode does, not just re-renders.
+let inFlightRefresh: Promise<RefreshResponse> | null = null
+
+function refreshOnce(): Promise<RefreshResponse> {
+  if (!inFlightRefresh) {
+    inFlightRefresh = apiPost<RefreshResponse>("/api/v1/auth/refresh", undefined).finally(() => {
+      inFlightRefresh = null
+    })
+  }
+  return inFlightRefresh
 }
 
 /**
@@ -19,15 +38,12 @@ interface RefreshResponse {
  * mint a fresh access token and avoid dropping the session on every reload.
  *
  * RefreshResponse carries no `user`, unlike LoginResponse (see
- * RefreshResponse.java: only accessToken/tokenType/expiresIn). Decoding the
- * access token's claims client-side was considered as a way to backfill
- * `user` — the codebase already treats JWT claims as informational rather
- * than a trust boundary in the browser — but the claims (`sub` as
- * `user:<uuid>`, `roles`) do not include email, so any User reconstructed
- * that way would need a fabricated email field. That's worse than leaving
- * `user` null: every consumer of the store already tolerates `user` being
- * null (ProtectedRoute only checks `accessToken`), so this is the less
- * invasive choice. `user` is populated for real on the next login.
+ * RefreshResponse.java: only accessToken/tokenType/expiresIn). `user.email`
+ * is genuinely unrecoverable here — the claims don't carry it — but
+ * `user.roles` is (see lib/jwtClaims.ts), and role-gated UI (HomePage's
+ * organizer-dashboard card) needs it to survive a reload, not just a fresh
+ * login. So `user` is backfilled with claims-derived id/roles and no email
+ * (User.email is optional for exactly this reason), rather than left null.
  *
  * A first-time visitor with no refresh cookie gets a 401 here. That is the
  * expected, common case — stay logged out, silently, no error shown.
@@ -39,10 +55,11 @@ export function useSilentRefresh(): { isLoading: boolean } {
   React.useEffect(() => {
     let cancelled = false
 
-    apiPost<RefreshResponse>("/api/v1/auth/refresh", undefined)
+    refreshOnce()
       .then((data) => {
         if (cancelled) return
-        setSession(data.accessToken, null)
+        const claims = decodeAccessTokenClaims(data.accessToken)
+        setSession(data.accessToken, claims ? { id: claims.userId, roles: claims.roles } : null)
       })
       .catch((error: unknown) => {
         // A 401 (no cookie, expired, revoked, replayed) is the normal

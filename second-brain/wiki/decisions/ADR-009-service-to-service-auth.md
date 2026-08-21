@@ -162,6 +162,19 @@ scope check. The gateway-boundary stripping rule (client-supplied
 through) still applies at the REST edge, unchanged — api-gateway remains
 REST-facing per ADR-023's scope.
 
+## Amendment: role→permission resolution added, token shape unchanged (ADR-043)
+
+[[ADR-043-dynamic-role-permission-system]] makes roles dynamic and
+admin-configurable. The two-token model, `X-User-Assertion`'s carriage
+of the original unmodified access token, and the gateway-boundary
+stripping rule above are **all unchanged** — `X-User-Assertion` still
+carries whatever `roles` claim auth-service put in it. What changes is
+purely downstream: services resolve that claim's role *names* against a
+permission catalog (cached in-memory, propagated via a compacted Kafka
+topic — see ADR-043) instead of matching a literal `"ORGANIZER"`/
+`"ADMIN"` string. No new header, no token-shape change, no change to
+this ADR's threat model.
+
 ## Open Questions
 
 - None outstanding — service token TTL flagged as starting default above.

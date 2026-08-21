@@ -2,18 +2,19 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 
+import { SeatSelectionPage } from "@/features/booking/SeatSelectionPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { ProtectedRoute } from "@/features/auth/ProtectedRoute";
 import { RegisterPage } from "@/features/auth/RegisterPage";
 import { useSilentRefresh } from "@/features/auth/useSilentRefresh";
+import { BrowsePage } from "@/features/browse/BrowsePage";
 import { HomePage } from "@/features/home/HomePage";
 import { ArtistsPage } from "@/features/organizer/ArtistsPage";
 import { CreateEventPage } from "@/features/organizer/CreateEventPage";
 import { EventDetailPage } from "@/features/organizer/EventDetailPage";
 import { EventsListPage } from "@/features/organizer/EventsListPage";
-import { useAuthStore } from "@/stores/auth";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,36 +28,6 @@ const queryClient = new QueryClient({
     },
   },
 });
-
-/**
- * "/" is one route with two faces: HomePage once signed in, a plain landing
- * otherwise. No ProtectedRoute redirect dance needed for the root — signing
- * out just swaps which face renders, in place.
- */
-function Root() {
-  const accessToken = useAuthStore((state) => state.accessToken);
-  return accessToken ? <HomePage /> : <Landing />;
-}
-
-function Landing() {
-  return (
-    <main className="auth-backdrop mx-auto flex min-h-dvh max-w-2xl flex-col items-start justify-center gap-4 px-6">
-      <h1 className="text-3xl font-semibold tracking-tight">TicketMaster</h1>
-      <p className="text-muted-foreground">
-        Phase 1 scaffold. Catalog and booking routes land here as those services
-        come online — see second-brain/wiki/architecture/implementation-roadmap.md.
-      </p>
-      <p className="flex gap-4 text-sm">
-        <Link to="/login" className="font-medium underline underline-offset-4">
-          Sign in
-        </Link>
-        <Link to="/register" className="font-medium underline underline-offset-4">
-          Create account
-        </Link>
-      </p>
-    </main>
-  );
-}
 
 /**
  * Gate for the whole app, not just protected routes.
@@ -78,33 +49,58 @@ function SessionGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <SessionGate>
-          <Routes>
-            <Route path="/" element={<Root />} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
+/**
+ * inventory-service (booking/checkout) doesn't exist yet (ADR-036 Phase
+ * 3). Dev-only: starts MSW's browser worker so features/booking's pages
+ * work against src/mocks/handlers.ts instead of a 404. Never runs in a
+ * production build — Vite drops this whole branch as dead code once
+ * `import.meta.env.DEV` is statically false.
+ */
+async function enableMocking(): Promise<void> {
+  if (!import.meta.env.DEV) return;
+  const { worker } = await import("./mocks/browser");
+  await worker.start({ onUnhandledRequest: "bypass" });
+}
 
-            {/*
-              Backend enforces ownership (api-gateway's ORGANIZER role gate,
-              plus event-service's per-resource organizer_id check) — this
-              guard is UX-only, same as every other ProtectedRoute use, not
-              a security boundary. No separate role check here since this
-              app has no client-side role-routing system anywhere yet
-              (brief: don't build one for this slice alone).
-            */}
-            <Route element={<ProtectedRoute />}>
-              <Route path="/organizer/events" element={<EventsListPage />} />
-              <Route path="/organizer/events/new" element={<CreateEventPage />} />
-              <Route path="/organizer/events/:id" element={<EventDetailPage />} />
-              <Route path="/organizer/artists" element={<ArtistsPage />} />
-            </Route>
-          </Routes>
-        </SessionGate>
-      </BrowserRouter>
-    </QueryClientProvider>
-  </React.StrictMode>,
-);
+enableMocking().then(() => {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <SessionGate>
+            <Routes>
+              {/*
+                Public storefront — works signed in or out, same as real
+                Ticketmaster's homepage. Account/organizer surfaces moved to
+                their own routes below instead of living at "/".
+              */}
+              <Route path="/" element={<BrowsePage />} />
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
+
+              {/*
+                Backend enforces ownership (api-gateway's ORGANIZER role gate,
+                plus event-service's per-resource organizer_id check) — this
+                guard is UX-only, same as every other ProtectedRoute use, not
+                a security boundary. Role gating in the UI (organizer link,
+                organizer-dashboard card) is informational only, not this
+                guard's job.
+              */}
+              <Route element={<ProtectedRoute />}>
+                <Route path="/account" element={<HomePage />} />
+                <Route
+                  path="/events/:eventId/sessions/:sessionId/seats"
+                  element={<SeatSelectionPage />}
+                />
+                <Route path="/organizer/events" element={<EventsListPage />} />
+                <Route path="/organizer/events/new" element={<CreateEventPage />} />
+                <Route path="/organizer/events/:id" element={<EventDetailPage />} />
+                <Route path="/organizer/artists" element={<ArtistsPage />} />
+              </Route>
+            </Routes>
+          </SessionGate>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </React.StrictMode>,
+  );
+});

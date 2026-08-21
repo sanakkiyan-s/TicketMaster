@@ -3,6 +3,12 @@ plugins {
     id("org.springframework.boot") version "3.5.6" apply false
     id("io.spring.dependency-management") version "1.1.7" apply false
     id("com.google.protobuf") version "0.9.4" apply false
+    // Every Kafka-producing service scaffold already declares
+    // kafka-avro-serializer (event/inventory/booking/payment/ticket/
+    // notification/fraud/analytics/media-service) - the schema codegen
+    // plugin was the missing piece making that usable. apply false here,
+    // applied per-module (inventory-service first) same as protobuf above.
+    id("com.github.davidmc24.gradle.plugin.avro") version "1.9.1" apply false
 }
 
 allprojects {

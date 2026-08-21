@@ -27,6 +27,12 @@ ruleset this vault operates under.
   — full reconstruction across all 22 ADRs: system diagram, service map,
   data ownership, booking/concurrency/event/real-time/search flows, ADR
   traceability table, superseded decisions, open TBDs.
+- [[frontend-product-blueprint]] (`wiki/architecture/frontend-product-blueprint.md`)
+  — discovery doc, not yet approved: user types, role×permission matrix,
+  page inventory, user journeys, booking/real-time/search UX, route tree,
+  page specs, component/state architecture, ADR→frontend traceability.
+  Flags that dynamic/admin-configurable RBAC (requested but never
+  decided) needs its own ADR before the frontend can assume it exists.
 
 # Projects
 
@@ -210,6 +216,16 @@ into standalone flow pages.
   Flux considered and rejected mainly on ArgoCD's UI being real portfolio
   value; kubectl-from-CI rejected for the same credential-blast-radius and
   drift reasons ADR-041 already used against ClickOps.
+- [[ADR-043-dynamic-role-permission-system]] — replaces ADR-030's
+  hardcoded ORGANIZER/ADMIN string checks with admin-configurable roles:
+  a fixed, code-defined permission catalog (~17 keys, 1:1 with existing
+  checks) that admins bundle into roles at runtime. Permission-set
+  changes propagate via a compacted Kafka topic + in-memory
+  materialization — the exact same topology ADR-012 already uses for
+  revocation, not a new mechanism. Role *assignment* to a user stays
+  claim-based (≤10 min staleness, same as today). Amends ADR-009 and
+  ADR-030 in place; day-one behavior reproduced byte-for-byte via seed
+  data.
 - [[ADR-036-build-order-and-phasing]] — closes the vault's oldest open
   question. Six dependency-ordered phases (bootstrap → identity/edge →
   catalog → transaction core → support consumers → secondary features →

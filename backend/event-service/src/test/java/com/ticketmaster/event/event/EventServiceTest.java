@@ -95,4 +95,32 @@ class EventServiceTest {
 
         org.mockito.Mockito.verify(outbox).publish(org.mockito.ArgumentMatchers.eq("event.created"), any(), any());
     }
+
+    @Test
+    void publishingADraftEventSetsStatusAndEmitsEventUpdated() {
+        when(events.findByIdAndOrganizerId(eventId, organizerId)).thenReturn(Optional.of(event));
+
+        Event published = eventService.publishEvent(eventId, organizerId, false);
+
+        assertThat(published.getStatus()).isEqualTo(EventStatus.PUBLISHED);
+        org.mockito.Mockito.verify(outbox).publish(org.mockito.ArgumentMatchers.eq("event.updated"), any(), any());
+    }
+
+    @Test
+    void publishingAnAlreadyPublishedEventIsRejected() {
+        event.publish(Instant.now());
+        when(events.findByIdAndOrganizerId(eventId, organizerId)).thenReturn(Optional.of(event));
+
+        assertThatThrownBy(() -> eventService.publishEvent(eventId, organizerId, false))
+                .isInstanceOf(InvalidEventStateException.class);
+    }
+
+    @Test
+    void publishingACancelledEventIsRejected() {
+        event.cancel(Instant.now());
+        when(events.findByIdAndOrganizerId(eventId, organizerId)).thenReturn(Optional.of(event));
+
+        assertThatThrownBy(() -> eventService.publishEvent(eventId, organizerId, false))
+                .isInstanceOf(InvalidEventStateException.class);
+    }
 }

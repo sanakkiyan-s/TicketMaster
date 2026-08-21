@@ -1,0 +1,25 @@
+{
+  "namespace": "com.ticketmaster.inventory.avro",
+  "type": "record",
+  "name": "SeatEvent",
+  "doc": "Published to the seat.events topic on every HELD/AVAILABLE/PURCHASED transition and hold expiry (ADR-002, ADR-022's two SSE event shapes). sessionId+seatId is the effective partition key so per-seat ordering is preserved.",
+  "fields": [
+    { "name": "sessionId", "type": "string" },
+    { "name": "seatId", "type": "string" },
+    {
+      "name": "eventType",
+      "type": { "type": "enum", "name": "SeatEventType", "symbols": ["SEAT_UPDATED", "HOLD_EXPIRED"] }
+    },
+    {
+      "name": "status",
+      "type": ["null", { "type": "enum", "name": "SeatStatus", "symbols": ["AVAILABLE", "HELD", "PURCHASED"] }],
+      "default": null,
+      "doc": "Present for SEAT_UPDATED only - a HOLD_EXPIRED event's implied status is always AVAILABLE, per ADR-002's no-stored-EXPIRED-value rule."
+    },
+    {
+      "name": "occurredAt",
+      "type": { "type": "long", "logicalType": "timestamp-millis" },
+      "doc": "Epoch millis, from the injected Clock (ADR-002's clock-skew amendment) - never SQL now()."
+    }
+  ]
+}

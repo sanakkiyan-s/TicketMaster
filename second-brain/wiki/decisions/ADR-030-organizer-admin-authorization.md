@@ -141,6 +141,35 @@ central change.
   `organizer_id` column; not designed now since no such requirement
   exists yet.
 
+## Amendment: roles become dynamic, ownership model unchanged (ADR-043)
+
+[[ADR-043-dynamic-role-permission-system]] replaces this ADR's hardcoded
+`ORGANIZER`/`ADMIN` string checks with a permission-catalog lookup, so
+an admin can create new roles at runtime. **The two-layer model itself —
+coarse gate at api-gateway, fine-grained ownership enforced by the
+owning service, admin bypasses ownership by design — is unchanged.**
+What changes:
+
+- Layer 1's `roles contains ORGANIZER` becomes "caller's resolved
+  permission set contains `event:manage-own`" (and the equivalent per
+  resource type) — same coarse-gate shape, backed by a permission key
+  instead of a literal string.
+- Layer 2's `UNLESS the caller holds ADMIN` bypass becomes `UNLESS the
+  caller holds <resource>:manage-any` — same bypass shape, same
+  audit-via-`AdminActionPerformed` requirement, just keyed on a
+  permission instead of a hardcoded role name. A future non-ADMIN role
+  granted a `*:manage-any` permission gets the same bypass and the same
+  audit obligation — this ADR's ownership guarantee (an organizer can
+  never touch another organizer's data without an explicit,
+  audited bypass capability) is unchanged by who holds that capability.
+- The `events.organizer_id` ownership anchor, and every service's
+  `WHERE organizer_id = ?` enforcement point, are completely unchanged
+  — ADR-043 only changes how the *coarse* gate and the *bypass* check
+  are evaluated, never where ownership data lives or how it's checked.
+
+See ADR-043 for the full permission catalog (seeded to reproduce this
+ADR's exact current behavior) and the propagation mechanism.
+
 ## Open Questions
 
 - Whether organizer-tier CRUD actions (not just admin actions) should

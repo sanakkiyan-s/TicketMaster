@@ -179,6 +179,82 @@
     }
   }
 
+  /*
+   * The public storefront's backdrop — brighter and more saturated than
+   * auth-backdrop's arrival wash or dashboard-backdrop's quiet work tones,
+   * because this is the one surface meant to feel like a live event
+   * marquee, not a form or a workspace.
+   */
+  .marquee-backdrop::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      radial-gradient(65% 55% at 20% 0%, oklch(0.68 0.22 300 / 40%) 0%, transparent 60%),
+      radial-gradient(60% 50% at 100% 10%, oklch(0.75 0.2 20 / 32%) 0%, transparent 62%),
+      radial-gradient(70% 60% at 50% 100%, oklch(0.75 0.19 230 / 30%) 0%, transparent 60%);
+  }
+
+  /*
+   * Seat map primitives — plain CSS keyed on [data-status]/[data-mine],
+   * not Tailwind utility classes, per frontend-product-blueprint.md §14:
+   * a live status push should flip an HTML attribute, not churn class
+   * strings on every SSE tick. Price-tier hue is computed from
+   * --tier-index (set inline per seat) rather than a fixed palette, so
+   * adding a tier never means touching this file.
+   */
+  .booking-seat {
+    --tier-hue: calc(230 - (var(--tier-index, 0) * 55));
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 6px;
+    border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+    background-color: oklch(0.78 0.13 var(--tier-hue));
+    cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+
+  .booking-seat:hover:not(:disabled) {
+    transform: scale(1.12);
+  }
+
+  .booking-seat[data-selected="true"] {
+    box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--accent, var(--primary));
+  }
+
+  .booking-seat[data-status="HELD"] {
+    background-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+    cursor: not-allowed;
+  }
+
+  .booking-seat[data-status="HELD"][data-mine="true"] {
+    background-color: oklch(0.78 0.13 var(--tier-hue));
+    box-shadow: 0 0 0 2px var(--background), 0 0 0 4px oklch(0.7 0.19 145);
+    cursor: default;
+  }
+
+  .booking-seat[data-status="PURCHASED"] {
+    background-color: color-mix(in oklab, var(--muted) 90%, transparent);
+    border-style: dashed;
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .booking-seat:disabled {
+    pointer-events: none;
+  }
+
+  .booking-seat-legend-swatch {
+    --tier-hue: calc(230 - (var(--tier-index, 0) * 55));
+    display: inline-block;
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 4px;
+    background-color: oklch(0.78 0.13 var(--tier-hue));
+  }
+
   /* What the glass has to refract. Sits behind everything, never interactive. */
   .auth-backdrop::before {
     content: "";

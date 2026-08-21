@@ -81,6 +81,16 @@ public class EventController {
         return EventResponse.from(eventService.cancelEvent(id, currentUser.resolve(request), isAdmin(request)));
     }
 
+    /**
+     * DRAFT -> PUBLISHED, making the event discoverable via search-service.
+     * Same ownership check as GET; 409 if the event isn't currently DRAFT
+     * (see EventService.publishEvent's javadoc).
+     */
+    @PostMapping("/{id}/publish")
+    public EventResponse publish(@PathVariable UUID id, HttpServletRequest request) {
+        return EventResponse.from(eventService.publishEvent(id, currentUser.resolve(request), isAdmin(request)));
+    }
+
     private boolean isAdmin(HttpServletRequest request) {
         return currentUser.resolveRoles(request).contains("ADMIN");
     }

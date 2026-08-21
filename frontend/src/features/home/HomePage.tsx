@@ -1,5 +1,6 @@
 import * as React from "react"
 import { Loader2, LogOut, Ticket, User as UserIcon } from "lucide-react"
+import { Link } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,6 +18,7 @@ import { useAuthStore } from "@/stores/auth"
  */
 export function HomePage() {
   const user = useAuthStore((state) => state.user)
+  const isOrganizer = user?.roles.some((role) => role === "ORGANIZER" || role === "ADMIN") ?? false
   const logout = useLogout(() => {
     // Session clears via useAuthStore regardless of route; no redirect
     // needed here since "/" already renders the signed-out landing state.
@@ -60,6 +62,22 @@ export function HomePage() {
             </CardDescription>
           </CardHeader>
         </Card>
+
+        {isOrganizer ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Organizer dashboard</CardTitle>
+              <CardDescription>
+                Manage your events, sessions, and artists.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button asChild size="sm">
+                <Link to="/organizer/events">Open dashboard</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <ProfileCard />
         <PreferencesCard preferences={preferences} />
