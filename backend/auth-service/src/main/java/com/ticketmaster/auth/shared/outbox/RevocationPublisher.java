@@ -68,16 +68,15 @@ public class RevocationPublisher {
     }
 
     /**
-     * Simplification, stated explicitly (per the task's instructions): no
-     * distributed-tracing infrastructure exists anywhere in this codebase
-     * yet - no span, no W3C traceparent generation at api-gateway, no
-     * correlation-id header read anywhere in auth-service as of this
-     * slice (cross-cutting-concerns.md lists tracing tooling as
-     * "not yet decided"). This opportunistically forwards an incoming
-     * `traceparent` header if a caller already sends one (future-proofing
-     * for when api-gateway starts generating one, per ADR-007's amendment),
-     * and otherwise writes a clearly all-zero placeholder trace id rather
-     * than inventing a fake one that would look like real trace data.
+     * ADR-015's OTel Java agent (see backend/Dockerfile) generates a real
+     * W3C traceparent on every request and every service in this repo now
+     * runs behind it, so the forwarded header below is live real trace
+     * data, not the future-proofing placeholder this comment originally
+     * described (that was written before ADR-015 existed). The all-zero
+     * fallback stays for the one real gap: a call with no bound HTTP
+     * request context (e.g. invoked from a non-HTTP path), where there is
+     * genuinely no traceparent to forward and inventing one would look
+     * like real trace data.
      */
     private String traceparent() {
         try {

@@ -1,0 +1,83 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: inventory-service
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:ticketmaster}
+    username: ${DB_USER:ticketmaster}
+    password: ${DB_PASSWORD:ticketmaster}
+    hikari:
+      initialization-fail-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        default_schema: inventory_service
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    schemas: inventory_service
+
+  data:
+    redis:
+      # Same shared Redis every other service uses (ADR-004) - see
+      # auth-service's application.yml for the 6380-not-6379 rationale.
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
+      # ADR-002's amendment: ~50ms command timeout so a blackholed Redis
+      # fails the fast-gate fast rather than blocking the servlet thread
+      # pool for the client's default (much longer) timeout.
+      timeout: 50ms
+      connect-timeout: 200ms
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+      properties:
+        schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8082}
+        # Producer's own delivery guarantee - inherited-default elsewhere
+        # in this repo (see the Kafka semantics audit in this session's
+        # log), pinned explicitly here since this is a fresh producer:
+        # acks=all + idempotence means a broker-acknowledged send is
+        # never silently duplicated or lost by the producer client itself.
+        acks: all
+        enable.idempotence: true
+    consumer:
+      # SeatEventBroadcaster's own consumer group, for SSE fan-out -
+      # every inventory-service instance must see every seat.events
+      # message (broadcast, not partitioned work), so group-id is unique
+      # per instance, same reasoning as api-gateway's RevocationConsumer.
+      group-id: inventory-service-sse-${random.uuid}
+      auto-offset-reset: latest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
+      properties:
+        schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8082}
+        specific.avro.reader: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: ${SWAGGER_UI_ENABLED:true}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized

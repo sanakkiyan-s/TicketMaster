@@ -1,0 +1,49 @@
+server:
+  port: 8086
+
+spring:
+  application:
+    name: search-service
+
+  # The root build.gradle.kts gives every module spring-data-jpa +
+  # the Postgres driver + Flyway unconditionally (most services need
+  # them) - search-service is Elasticsearch-only and configures no
+  # spring.datasource, so without this exclusion Spring Boot's
+  # DataSourceAutoConfiguration crashes the app at startup trying to
+  # auto-configure a DataSource that was never meant to exist here
+  # ("Failed to determine a suitable driver class"), reproduced live
+  # 2026-08-20. Scoped to this service's own config, not the shared
+  # root build file every other module still needs untouched.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URI:http://localhost:9200}
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
+    consumer:
+      group-id: search-service
+      auto-offset-reset: earliest
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: ${SWAGGER_UI_ENABLED:true}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      # ADR-032: liveness never dependency-aware, readiness may be.
+      probes:
+        enabled: true
+      show-details: when-authorized

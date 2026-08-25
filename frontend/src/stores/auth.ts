@@ -3,7 +3,12 @@ import { setAuthHeader } from "@/lib/api";
 
 export interface User {
   id: string;
-  email: string;
+  /**
+   * Optional because a reload-recovered session (useSilentRefresh) backfills
+   * this User from the access token's claims, which carry no email — only
+   * a real LoginResponse populates it.
+   */
+  email?: string;
   roles: string[];
 }
 

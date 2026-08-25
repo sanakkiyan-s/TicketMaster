@@ -8,3 +8,15 @@ dependencies {
 repositories {
     maven { url = uri("https://packages.confluent.io/maven/") }
 }
+
+// First-and-only @SpringBootApplication main class in this module, so
+// bootJar is re-enabled and the plain jar disabled — same pattern as
+// auth-service's build.gradle.kts (the root build turns bootJar off by
+// default for every module until it actually has an entry point).
+tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+    enabled = true
+}
+
+tasks.named<Jar>("jar") {
+    enabled = false
+}

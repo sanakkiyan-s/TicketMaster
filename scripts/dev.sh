@@ -8,13 +8,14 @@
 #              Kafka + Schema Registry + Connect, Vault, MinIO.
 #   backend/   auth-service (host :8180, container :8081 - 8081/8083 were
 #              already taken by other local processes), api-gateway
-#              (:8080), user-service (host :8090, container :8082) - the
-#              only three modules with real sources so far
-#              (ADR-036 Phase 1). Built and run as containers via the
-#              same docker-compose.yml, gated behind the "backend"
-#              profile so plain infra startup never pays their build
-#              time. The other 12 backend/* directories hold build
-#              files only - nothing to run.
+#              (:8080), user-service (host :8090, container :8082),
+#              event-service (:8084), venue-service (:8085),
+#              search-service (:8086, Elasticsearch-backed) - Phase 1
+#              (ADR-036) plus the full Phase 2 catalog batch. Built and
+#              run as containers via the same docker-compose.yml, gated
+#              behind the "backend" profile so plain infra startup never
+#              pays their build time. The other 9 backend/* directories
+#              hold build files only - nothing to run.
 #   observability/ OTel Collector, Tempo, Loki, Mimir, Prometheus (agent
 #              mode), redis-exporter, Grafana (:3000) - ADR-015. Gated
 #              behind the "observability" profile, same reasoning as
@@ -50,7 +51,7 @@ HEALTHCHECKED=(postgres-coordinator postgres-worker-1 redis minio)
 # Backend containers declare their own healthcheck (Dockerfile installs
 # curl for exactly this) - same wait_for_health mechanism as infra,
 # different list, since these only run under the "backend" profile.
-BACKEND_HEALTHCHECKED=(auth-service api-gateway user-service)
+BACKEND_HEALTHCHECKED=(auth-service api-gateway user-service event-service venue-service search-service inventory-service)
 
 # None of the observability images declare a container healthcheck
 # (Tempo/Loki/Mimir/Grafana's base images don't reliably ship curl or
@@ -227,6 +228,9 @@ print_backend_endpoints() {
     api-gateway     http://localhost:8080
     auth-service    http://localhost:8180   (container's own port is 8081 - host 8081 was already taken by an unrelated local project, and 8083 by kafka-connect's own REST port)
     user-service    http://localhost:8090   (container's own port is 8082 - 8082 is schema-registry's host mapping)
+    event-service   http://localhost:8084
+    venue-service   http://localhost:8085
+    search-service  http://localhost:8086   (public, no JWT required - the read-only browse API)
 
 EOF
 }
@@ -272,15 +276,85 @@ start_infra() {
     die "the coordinator is healthy but localhost:$HOST_PG_PORT does not reach it"
   fi
 
+  register_kafka_connectors
+
   print_endpoints
+}
+
+# Kafka Connect has no container healthcheck (see HEALTHCHECKED's comment),
+# so poll its REST API directly rather than waiting on docker's health
+# state. Connector registration is otherwise a fully manual `curl -X POST`
+# step done by hand every time a fresh Postgres/Kafka volume comes up
+# (real gap, bit this project twice: a local outage where the connector
+# silently stopped forwarding, and a fresh Codespace where no connector
+# had ever been registered at all) — idempotent by name, safe to call on
+# every `infra` start.
+register_kafka_connectors() {
+  local connect_url="http://localhost:8083"
+  local deadline=$(( SECONDS + WAIT_TIMEOUT_SECONDS ))
+
+  printf '    %-22s' "kafka-connect REST"
+  until curl --silent --fail --output /dev/null "$connect_url/connectors" 2>/dev/null; do
+    if (( SECONDS > deadline )); then
+      printf '\033[0;31mtimeout\033[0m\n'
+      warn "kafka-connect REST API did not become ready in ${WAIT_TIMEOUT_SECONDS}s — connectors not registered"
+      return 1
+    fi
+    sleep 2
+  done
+  printf '\033[0;32mready\033[0m\n'
+
+  local config_file connector_name status
+  for config_file in "$ROOT"/infra/kafka-connect/*.json; do
+    [[ -f "$config_file" ]] || continue
+    connector_name="$(grep -m1 '"name"' "$config_file" | sed -E 's/.*"name"\s*:\s*"([^"]+)".*/\1/')"
+    [[ -n "$connector_name" ]] || { warn "could not read connector name from $config_file — skipping"; continue; }
+
+    status="$(curl --silent --output /dev/null --write-out '%{http_code}' "$connect_url/connectors/$connector_name/status")"
+    if [[ "$status" == "200" ]]; then
+      info "  $connector_name already registered"
+      continue
+    fi
+
+    info "  registering $connector_name"
+    if ! curl --silent --fail --show-error \
+        --request POST "$connect_url/connectors" \
+        --header 'Content-Type: application/json' \
+        --data @"$config_file" --output /dev/null; then
+      warn "  failed to register $connector_name — check:  curl $connect_url/connectors/$connector_name/status"
+    fi
+  done
 }
 
 start_backend() {
   require_tools
+  # `infra` normally seeds infra/.env first; `backend` must not assume
+  # that happened - a fresh checkout (e.g. a Codespace that never ran
+  # `infra`) hits "couldn't find env file" from compose otherwise. Same
+  # idempotent seed_env/load_env pair start_infra already uses.
+  seed_env "$ENV_FILE" "$ROOT/infra/.env.example"
+  load_env
 
-  info "building and starting backend containers (auth-service, api-gateway, user-service)"
-  info "first build compiles the whole Gradle multi-module tree - can take a few minutes"
-  compose --profile backend up --detach --build
+  # Deliberately ONE service at a time, never `--build` on the `up` line.
+  # `compose --profile backend up --detach --build` looks scoped but isn't:
+  # Compose's BuildKit bake step builds every image tagged with the invoked
+  # profile before it ever looks at which services `up` was asked to start,
+  # so it always builds all 6 (auth/api-gateway/user/event/venue/search)
+  # concurrently regardless of profile filtering. That's 5-6 concurrent
+  # `gradle --no-daemon bootJar` JVMs, each 500MB-1.5GB+ mid-compile, inside
+  # WSL2's default ~50%-of-host memory cap (no committed .wslconfig raises
+  # it) - on a 16GB/4-core dev machine that reliably OOMs the WSL2 backend
+  # (`rpc error: ...EOF` from buildx), reproduced repeatedly. Building
+  # sequentially first, then starting from already-built images, keeps
+  # exactly one Gradle JVM alive at a time during the expensive part.
+  info "building backend images one at a time (concurrent builds OOM this machine's WSL2 VM - see comment above)"
+  for service in "${BACKEND_HEALTHCHECKED[@]}"; do
+    info "  building $service"
+    compose --profile backend build "$service"
+  done
+
+  info "starting backend containers"
+  compose --profile backend up --detach --no-build
 
   info "waiting for health"
   if ! wait_for_health "${BACKEND_HEALTHCHECKED[@]}"; then
